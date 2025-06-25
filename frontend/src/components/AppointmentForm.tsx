@@ -35,7 +35,7 @@ const AppointmentForm: React.FC<AppointmentFormProps> = ({ doctor, onSubmit, onC
       } else {
         console.error('Failed to fetch available slots');
         setAvailableSlots([]);
-      }
+    }
     } catch (error) {
       console.error('Error fetching available slots:', error);
       setAvailableSlots([]);
@@ -67,10 +67,10 @@ const AppointmentForm: React.FC<AppointmentFormProps> = ({ doctor, onSubmit, onC
     <div className="bg-chat-assistant-muted rounded-lg p-4 text-white w-full max-w-lg">
       <h3 className="text-lg font-bold mb-3 text-gray-100">Book with {doctor.name}</h3>
       <p className="text-sm text-gray-400 mb-4">{doctor.specialization} - {doctor.location}</p>
-      
+
       <form onSubmit={handleSubmit} className="space-y-3">
-        <input
-          type="text"
+          <input
+            type="text"
           value={patientName}
           onChange={(e) => setPatientName(e.target.value)}
           placeholder="Full Name"
@@ -79,8 +79,8 @@ const AppointmentForm: React.FC<AppointmentFormProps> = ({ doctor, onSubmit, onC
         />
         
         <div className="space-y-3">
-          <input
-            type="date"
+            <input
+              type="date"
             value={appointmentDate}
             onChange={(e) => {
               setAppointmentDate(e.target.value);
@@ -89,13 +89,13 @@ const AppointmentForm: React.FC<AppointmentFormProps> = ({ doctor, onSubmit, onC
             min={today}
             required
             className="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm focus:ring-blue-500 focus:border-blue-500"
-          />
+            />
           
           {appointmentDate && (
-            <div>
+          <div>
               <label className="block text-sm font-medium text-gray-300 mb-2">
                 Available Time Slots
-              </label>
+            </label>
               {isLoadingSlots ? (
                 <div className="text-sm text-gray-400">Loading available slots...</div>
               ) : availableSlots.length > 0 ? (
@@ -116,27 +116,27 @@ const AppointmentForm: React.FC<AppointmentFormProps> = ({ doctor, onSubmit, onC
                     >
                       {slot.time_12}
                     </button>
-                  ))}
+              ))}
                 </div>
               ) : (
                 <div className="text-sm text-gray-400">No available slots for this date</div>
-              )}
-            </div>
+            )}
+          </div>
           )}
         </div>
-        
-        <textarea
+
+          <textarea
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
           placeholder="Reason for visit (optional)"
-          rows={2}
+            rows={2}
           className="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm focus:ring-blue-500 focus:border-blue-500"
         ></textarea>
         
         <div className="flex justify-end gap-3 pt-2">
           <button type="button" onClick={onCancel} className="text-sm text-gray-400 hover:text-white">Cancel</button>
-          <button 
-            type="submit" 
+          <button
+            type="submit"
             disabled={!appointmentTime}
             className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-2 px-4 rounded-lg text-sm"
           >

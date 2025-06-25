@@ -332,6 +332,6 @@ async def create_calendar_event(doctor: models.Doctor, appointment_data: dict, d
                 pass  # Don't fail if we can't update the DB
         else:
             print(f"❌ Error managing calendar event for {doctor.name}: {error_msg}")
-            import traceback
-            traceback.print_exc()
+        import traceback
+        traceback.print_exc()
         return False 

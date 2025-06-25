@@ -52,7 +52,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
 
     // Check if user wants to book tests after diagnosis
     if (content.toLowerCase().includes('book medical tests') || content.toLowerCase().includes('i want to book medical tests')) {
-      try {
+    try {
         // Get test recommendations using LLM
         const response = await fetch(`http://localhost:8000/tests/recommendations/${encodeURIComponent(diagnosticState.symptoms)}`, {
           method: 'GET',
@@ -81,7 +81,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
     if (content.toLowerCase().includes('book an appointment') || content.toLowerCase().includes('i want to book an appointment')) {
       try {
         // Get doctor recommendations using LLM
-        const response = await fetch('http://localhost:8000/recommend-doctors', {
+      const response = await fetch('http://localhost:8000/recommend-doctors', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ symptoms: diagnosticState.symptoms }),
@@ -118,7 +118,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
         }),
       });
       const result: RouterResponse = await response.json();
-
+      
       if (result.next_step === 'answer_question' && result.current_question) {
         addMessage({ content: result.message, role: 'assistant', type: 'text' });
         addMessage({ content: '', role: 'assistant', type: 'diagnostic_question', question: result.current_question });
@@ -154,8 +154,8 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
   const handleBookAppointment = (doctors: Doctor[]) => {
     addMessage({
       content: "Excellent. Here are the recommended specialists. Please choose one to proceed with booking.",
-      role: 'assistant',
-      type: 'doctors',
+            role: 'assistant',
+            type: 'doctors',
       doctors,
     });
   };
@@ -163,7 +163,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
   const handleBookTests = (tests: TestRecommendation[]) => {
     addMessage({
       content: "Certainly. Here are the recommended tests. Please review and confirm to book.",
-      role: 'assistant',
+        role: 'assistant',
       type: 'tests',
       tests,
     });
@@ -213,14 +213,14 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(bookingData),
       });
-      
+
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.detail || 'Failed to book tests');
       }
-      
+
       const result = await response.json();
-      
+
       // Remove the test form message
       setMessages(prev => prev.filter(m => m.type !== 'test_form'));
       
@@ -251,8 +251,8 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
     if (!appointmentMessage?.appointment) {
       addMessage({
         content: '❌ Could not find appointment details for rescheduling.',
-        role: 'assistant',
-        type: 'text'
+      role: 'assistant',
+      type: 'text'
       });
       return;
     }
@@ -278,17 +278,17 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
           new_time: newTime
         }),
       });
-      
+
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.detail || 'Failed to reschedule appointment');
       }
-      
+
       const result = await response.json();
-      
+
       // Remove the reschedule form message
       setMessages(prev => prev.filter(m => m.type !== 'reschedule-form'));
-      
+
       // Find the original appointment to get missing fields
       const originalAppointment = messages.find(m => 
         m.type === 'appointment-success' && m.appointment?.id === appointmentId
@@ -384,7 +384,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
         <>
           <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
             {messages.map((msg) => (
-              <MessageBubble
+              <MessageBubble 
                 key={msg.id}
                 message={msg}
                 onQuickReply={handleSendMessage}
@@ -404,18 +404,18 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
             {isLoading && (
               <div className="flex justify-start">
                   <div className="w-8 h-8 rounded-full flex-shrink-0 bg-green-600 flex items-center justify-center">
-                      <i className="fas fa-robot text-white text-sm"></i>
+                    <i className="fas fa-robot text-white text-sm"></i>
                   </div>
                   <div className="ml-3 bg-chat-assistant rounded-2xl px-4 py-3 text-sm text-gray-300">
                       Typing...
-                  </div>
+                </div>
               </div>
             )}
             <div ref={messagesEndRef} />
           </div>
           <div className="p-4 md:p-6 border-t border-chat-border">
             <ChatInput onSendMessage={handleSendMessage} isLoading={isLoading} disabled={isLoading} />
-          </div>
+      </div>
         </>
       )}
     </div>
