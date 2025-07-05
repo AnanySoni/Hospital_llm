@@ -1,3 +1,22 @@
+test script commands 
+# Run all tests
+python master_test_suite.py
+
+# Run specific section
+python master_test_suite.py --section phone_recognition
+
+# Verbose output
+python master_test_suite.py --verbose
+
+# Test specific functionality
+python master_test_suite.py --section core_features --verbose
+
+
+
+
+
+
+
 # 🏥 Hospital LLM Project - Smart Diagnostic Router
 
 An intelligent hospital appointment booking system with AI-powered diagnostic assessment, test recommendations, and smart routing.

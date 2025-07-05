@@ -2,10 +2,27 @@ import os
 import httpx
 import json
 import uuid
+import logging
+import asyncio
 from typing import Dict, List, Optional, Tuple
 from dotenv import load_dotenv
+from sqlalchemy.orm import Session
+from datetime import datetime
+# Import confidence utilities (with fallback for testing)
+try:
+    from .confidence_utils import calculate_confidence_level
+except ImportError:
+    def calculate_confidence_level(score: float) -> str:
+        if score >= 0.8:
+            return "high"
+        elif score >= 0.6:
+            return "medium"
+        else:
+            return "low"
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_API_URL = os.getenv("GROQ_API_URL", "https://api.groq.com/v1/chat/completions")
@@ -312,8 +329,49 @@ async def get_doctor_recommendations(symptoms: str, doctors: list):
         
         return json.dumps(fallback_recommendations[:3]) 
 
-async def call_groq_api(prompt: str, system_message: str = None) -> str:
-    """Generic function to call Groq API"""
+def robust_json_parse(response_text: str):
+    """Robust JSON parsing with multiple fallback strategies - handles both objects and arrays"""
+    try:
+        # First attempt: Direct JSON parse
+        return json.loads(response_text)
+    except json.JSONDecodeError:
+        try:
+            # Second attempt: Extract JSON from markdown/text
+            import re
+            # Look for JSON blocks in markdown (both objects and arrays)
+            json_pattern = r'```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```'
+            matches = re.findall(json_pattern, response_text, re.DOTALL)
+            
+            if matches:
+                return json.loads(matches[0])
+                
+            # Look for standalone JSON objects
+            json_pattern = r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
+            matches = re.findall(json_pattern, response_text, re.DOTALL)
+            
+            for match in matches:
+                try:
+                    return json.loads(match)
+                except:
+                    continue
+            
+            # Look for standalone JSON arrays
+            json_pattern = r'\[[^\[\]]*(?:\[[^\[\]]*\][^\[\]]*)*\]'
+            matches = re.findall(json_pattern, response_text, re.DOTALL)
+            
+            for match in matches:
+                try:
+                    return json.loads(match)
+                except:
+                    continue
+                    
+        except Exception:
+            pass
+            
+        raise ValueError("No valid JSON found in response")
+
+async def call_groq_api(prompt: str, system_message: str = None, max_retries: int = 3, retry_delay: float = 2.0) -> str:
+    """Generic function to call Groq API with rate limiting protection"""
     if not GROQ_API_KEY:
         raise Exception("GROQ_API_KEY not found")
     
@@ -334,35 +392,48 @@ async def call_groq_api(prompt: str, system_message: str = None) -> str:
         "max_tokens": 1500
     }
     
-    async with httpx.AsyncClient() as client:
-        response = await client.post(GROQ_API_URL, headers=headers, json=data)
-        response.raise_for_status()
-        result = response.json()
-        content = result["choices"][0]["message"]["content"]
-        
-        # Clean the response to extract JSON
-        content = content.strip()
-        
-        # Try to find JSON content between ```json and ``` or [ and ]
-        if "```json" in content:
-            start = content.find("```json") + 7
-            end = content.find("```", start)
-            if end != -1:
-                content = content[start:end].strip()
-        elif content.startswith("[") and content.endswith("]"):
-            # Already looks like JSON array
-            pass
-        elif content.startswith("{") and content.endswith("}"):
-            # Already looks like JSON object
-            pass
-        else:
-            # Try to find JSON-like content
-            import re
-            json_match = re.search(r'(\[.*\]|\{.*\})', content, re.DOTALL)
-            if json_match:
-                content = json_match.group(1)
-        
-        return content
+    last_exception = None
+    
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(GROQ_API_URL, headers=headers, json=data)
+                response.raise_for_status()
+                result = response.json()
+                content = result["choices"][0]["message"]["content"]
+                return content.strip()
+                
+        except httpx.HTTPStatusError as e:
+            last_exception = e
+            if e.response.status_code == 429:  # Rate limit error
+                if attempt < max_retries - 1:
+                    wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
+                    print(f"Rate limit hit, waiting {wait_time} seconds before retry {attempt + 1}")
+                    await asyncio.sleep(wait_time)
+                    continue
+                else:
+                    # For rate limits, provide a graceful degradation instead of failing
+                    print(f"Groq API call failed: {e}")
+                    return "Rate limit exceeded. Using fallback response."
+            elif e.response.status_code >= 500:  # Server errors
+                if attempt < max_retries - 1:
+                    wait_time = retry_delay * (attempt + 1)
+                    print(f"Server error {e.response.status_code}, waiting {wait_time} seconds before retry")
+                    await asyncio.sleep(wait_time)
+                    continue
+            raise e
+            
+        except (httpx.RequestError, httpx.TimeoutException) as e:
+            last_exception = e
+            if attempt < max_retries - 1:
+                wait_time = retry_delay * (attempt + 1)
+                print(f"Network error, waiting {wait_time} seconds before retry")
+                await asyncio.sleep(wait_time)
+                continue
+            raise e
+    
+    # If we get here, all retries failed
+    raise last_exception or Exception("All retry attempts failed")
 
 
 async def generate_diagnostic_questions(symptoms: str, session_id: str) -> List[dict]:
@@ -396,7 +467,20 @@ async def generate_diagnostic_questions(symptoms: str, session_id: str) -> List[
     
     try:
         response = await call_groq_api(prompt, system_message)
-        questions = json.loads(response)
+        parsed_response = robust_json_parse(response)
+        
+        # Handle both array and object responses
+        if isinstance(parsed_response, list):
+            questions = parsed_response
+        elif isinstance(parsed_response, dict) and "questions" in parsed_response:
+            questions = parsed_response["questions"]
+        else:
+            # If it's not a list or doesn't have questions, use fallback
+            raise ValueError("Invalid response format")
+        
+        # Validate that we have a proper questions list
+        if not isinstance(questions, list) or len(questions) == 0:
+            raise ValueError("No valid questions found in response")
         
         # Store session
         diagnostic_sessions[session_id] = {
@@ -435,9 +519,9 @@ async def generate_diagnostic_questions(symptoms: str, session_id: str) -> List[
 
 
 async def generate_predictive_diagnosis(symptoms: str, answers: dict) -> dict:
-    """Generate predictive diagnosis based on symptoms and answers"""
+    """Generate predictive diagnosis based on symptoms and answers with confidence scoring"""
     
-    system_message = """You are an expert medical AI assistant. Based on symptoms and patient answers, provide a predictive diagnosis. 
+    system_message = """You are an expert medical AI assistant. Based on symptoms and patient answers, provide a predictive diagnosis with confidence assessment. 
     Be conservative and always recommend professional medical evaluation. Return ONLY JSON format."""
     
     # Combine symptoms and answers
@@ -448,33 +532,76 @@ async def generate_predictive_diagnosis(symptoms: str, answers: dict) -> dict:
     prompt = f"""
     {context}
     
-    Provide a predictive diagnosis in JSON format:
+    Provide a predictive diagnosis with confidence assessment in JSON format:
     {{
         "possible_conditions": ["condition1", "condition2"],
         "confidence_level": "High/Medium/Low",
         "urgency_level": "Emergency/Urgent/Routine",
         "recommended_action": "Immediate action needed",
-        "explanation": "Detailed explanation of the diagnosis"
+        "explanation": "Detailed explanation of the diagnosis",
+        "confidence_score": 0.75,
+        "diagnostic_confidence": {{
+            "score": 0.75,
+            "level": "medium",
+            "reasoning": "Good symptom match with some uncertainty factors",
+            "uncertainty_factors": [
+                "Limited physical examination data",
+                "No laboratory test results available"
+            ]
+        }}
     }}
+    
+    Confidence scoring guidelines:
+    - 0.9-1.0: Highly specific symptoms, clear diagnosis indicators
+    - 0.7-0.89: Good symptom match, some uncertainty factors
+    - 0.5-0.69: Moderate symptoms, multiple possibilities
+    - 0.3-0.49: Vague symptoms, limited information
+    - 0.0-0.29: Insufficient information for reliable assessment
     
     Important guidelines:
     - Always err on the side of caution
     - If symptoms suggest emergency, mark as Emergency
     - Be specific about possible conditions
     - Explain why each condition is possible
+    - Include confidence assessment for transparency
     """
     
     try:
         response = await call_groq_api(prompt, system_message)
-        return json.loads(response)
+        diagnosis_data = json.loads(response)
+        
+        # Ensure confidence scoring is present
+        if "confidence_score" not in diagnosis_data:
+            base_score = 0.6 if len(answers) > 2 else 0.4
+            diagnosis_data["confidence_score"] = base_score
+            
+        if "diagnostic_confidence" not in diagnosis_data:
+            score = diagnosis_data.get("confidence_score", 0.6)
+            diagnosis_data["diagnostic_confidence"] = {
+                "score": score,
+                "level": calculate_confidence_level(score),
+                "reasoning": "Confidence assessment based on symptom analysis",
+                "uncertainty_factors": ["Limited physical examination data"] if len(answers) < 3 else []
+            }
+        
+        return diagnosis_data
+        
     except Exception as e:
         print(f"Error generating diagnosis: {e}")
+        base_score = 0.4
         return {
             "possible_conditions": ["Medical evaluation needed"],
             "confidence_level": "Low",
             "urgency_level": "Routine",
             "recommended_action": "Schedule a consultation with a healthcare provider",
-            "explanation": "Based on your symptoms, a professional medical evaluation is recommended to determine the exact cause and appropriate treatment."
+            "explanation": "Based on your symptoms, a professional medical evaluation is recommended to determine the exact cause and appropriate treatment.",
+            "confidence_score": base_score,
+            "diagnostic_confidence": {
+                "score": base_score,
+                "level": "low",
+                "reasoning": "Automated fallback assessment",
+                "uncertainty_factors": ["System error occurred", "Limited diagnostic information"]
+            }
         }
 
 
@@ -563,7 +690,7 @@ async def make_routing_decision(diagnosis: dict, test_recommendations: List[dict
     
     try:
         response = await call_groq_api(prompt, system_message)
-        decision = json.loads(response)
+        decision = robust_json_parse(response)
         
         # Filter recommended tests and doctors based on the decision
         if "recommended_tests" in decision:
@@ -575,26 +702,69 @@ async def make_routing_decision(diagnosis: dict, test_recommendations: List[dict
         
         if "recommended_doctors" in decision:
             doctor_ids = decision["recommended_doctors"]
-            decision["recommended_doctors"] = [
-                {
-                    "id": doc["id"],
-                    "name": doc["name"],
-                    "specialization": doc["department"],
-                    "reason": f"Recommended for your condition based on expertise in {doc['department']}",
-                    "experience": f"Experienced in {doc['department']}",
-                    "expertise": doc.get("tags", [doc["department"]])
+            
+            def safe_map_doctor(doc):
+                """Safely map database doctor to DoctorRecommendation format"""
+                # Handle different possible doctor structures
+                doctor_id = doc.get("id", 0)
+                doctor_name = doc.get("name", "Unknown Doctor")
+                
+                # Extract specialization from various possible fields
+                specialization = (
+                    doc.get("specialization") or 
+                    doc.get("department") or 
+                    (doc.get("department_name") if doc.get("department_name") else None) or
+                    "General Medicine"
+                )
+                
+                # Extract expertise/tags from various possible fields
+                expertise = (
+                    doc.get("expertise") or 
+                    doc.get("tags") or 
+                    doc.get("conditions") or 
+                    [specialization]
+                )
+                
+                # Ensure expertise is a list
+                if isinstance(expertise, str):
+                    expertise = [expertise]
+                elif not isinstance(expertise, list):
+                    expertise = [specialization]
+                
+                return {
+                    "id": doctor_id,
+                    "name": doctor_name,
+                    "specialization": specialization,
+                    "reason": f"Dr. {doctor_name.split()[-1] if ' ' in doctor_name else doctor_name} is recommended based on expertise in {specialization}",
+                    "experience": f"Qualified medical professional specializing in {specialization}",
+                    "expertise": expertise
                 }
-                for doc in doctors if doc["id"] in doctor_ids
+            
+            decision["recommended_doctors"] = [
+                safe_map_doctor(doc) for doc in doctors if doc.get("id") in doctor_ids
             ]
         
         return decision
     except Exception as e:
         print(f"Error making routing decision: {e}")
+        
+        # Create safe fallback doctors with proper structure
+        safe_doctors = []
+        for doc in doctors[:3]:
+            safe_doctors.append({
+                "id": doc.get("id", 0),
+                "name": doc.get("name", "Available Doctor"),
+                "specialization": doc.get("department") or doc.get("specialization") or "General Medicine",
+                "reason": "Available for medical consultation and evaluation",
+                "experience": "Qualified medical professional",
+                "expertise": doc.get("tags", []) or doc.get("expertise", []) or ["General Medicine"]
+            })
+        
         return {
             "action_type": "book_appointment",
             "reasoning": "Based on your symptoms, a medical consultation is recommended",
             "recommended_tests": [],
-            "recommended_doctors": doctors[:3],
+            "recommended_doctors": safe_doctors,
             "urgency_message": "Please schedule an appointment with a healthcare provider for proper evaluation."
         }
 
@@ -606,6 +776,48 @@ async def process_diagnostic_answer(session_id: str, question_id: int, answer: s
         raise ValueError("Invalid session ID")
     
     session = diagnostic_sessions[session_id]
+    
+    # Handle case where session exists but has no questions (e.g., due to LLM failure)
+    if not session.get("questions") or len(session["questions"]) == 0:
+        logger.warning(f"Session {session_id} has no questions, proceeding to diagnosis")
+        
+        try:
+            # Use initial symptoms for diagnosis
+            symptoms = session.get("initial_symptoms") or session.get("symptoms", "general symptoms")
+            diagnosis = await generate_predictive_diagnosis(symptoms, {})
+            test_recommendations = await generate_test_recommendations(diagnosis, symptoms)
+            routing_decision = await make_routing_decision(diagnosis, test_recommendations, doctors)
+            
+            session["is_complete"] = True
+            session["diagnosis"] = diagnosis
+            session["decision"] = routing_decision
+            
+            return {
+                "session_id": session_id,
+                "current_question": None,
+                "questions_remaining": 0,
+                "diagnosis": diagnosis,
+                "decision": routing_decision,
+                "message": "Based on the information provided, here's my assessment:",
+                "next_step": "review_diagnosis"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error generating fallback diagnosis: {e}")
+            return {
+                "session_id": session_id,
+                "current_question": None,
+                "questions_remaining": 0,
+                "diagnosis": None,
+                "decision": None,
+                "message": "I'm having trouble processing your information right now. Please try again later.",
+                "next_step": "provide_diagnosis"
+            }
+    
+    # Initialize answers dict if not present
+    if "answers" not in session:
+        session["answers"] = {}
+    
     session["answers"][question_id] = answer
     
     # Check if all questions are answered
@@ -625,31 +837,69 @@ async def process_diagnostic_answer(session_id: str, question_id: int, answer: s
             "next_step": "answer_question"
         }
     else:
-        # All questions answered, generate diagnosis and routing
-        diagnosis = await generate_predictive_diagnosis(session["initial_symptoms"], session["answers"])
-        test_recommendations = await generate_test_recommendations(diagnosis, session["initial_symptoms"])
-        routing_decision = await make_routing_decision(diagnosis, test_recommendations, doctors)
+        # All questions answered, generate diagnosis and routing with confidence
+        symptoms = session.get("initial_symptoms") or session.get("symptoms", "general symptoms")
         
-        session["is_complete"] = True
-        session["diagnosis"] = diagnosis
-        session["decision"] = routing_decision
-        
-        return {
-            "session_id": session_id,
-            "current_question": None,
-            "questions_remaining": 0,
-            "diagnosis": diagnosis,
-            "decision": routing_decision,
-            "message": "Based on your symptoms and answers, here's our assessment:",
-            "next_step": "review_diagnosis"
-        }
+        try:
+            diagnosis = await generate_predictive_diagnosis(symptoms, session["answers"])
+            test_recommendations = await generate_test_recommendations(diagnosis, symptoms)
+            routing_decision = await make_routing_decision(diagnosis, test_recommendations, doctors)
+            
+            # Calculate overall confidence from diagnosis
+            overall_confidence = None
+            if diagnosis and "diagnostic_confidence" in diagnosis:
+                overall_confidence = diagnosis["diagnostic_confidence"]
+            
+            session["is_complete"] = True
+            session["diagnosis"] = diagnosis
+            session["decision"] = routing_decision
+            
+            return {
+                "session_id": session_id,
+                "current_question": None,
+                "questions_remaining": 0,
+                "diagnosis": diagnosis,
+                "decision": routing_decision,
+                "message": "Based on your symptoms and answers, here's our assessment:",
+                "next_step": "review_diagnosis",
+                "confidence": overall_confidence
+            }
+            
+        except Exception as e:
+            logger.error(f"Error generating final diagnosis: {e}")
+            return {
+                "session_id": session_id,
+                "current_question": None,
+                "questions_remaining": 0,
+                "diagnosis": None,
+                "decision": None,
+                "message": "Thank you for answering the questions. Let me provide what guidance I can.",
+                "next_step": "provide_diagnosis"
+            }
 
 
 async def start_diagnostic_session(symptoms: str, doctors: List[dict]) -> dict:
     """Start a new diagnostic session"""
     
     session_id = str(uuid.uuid4())
-    questions = await generate_diagnostic_questions(symptoms, session_id)
+    
+    try:
+        questions = await generate_diagnostic_questions(symptoms, session_id)
+    except Exception as e:
+        logger.error(f"Error generating diagnostic questions: {e}")
+        questions = []
+    
+    # Store session data even if questions failed to generate
+    diagnostic_sessions[session_id] = {
+        "initial_symptoms": symptoms,
+        "symptoms": symptoms,  # Keep both for compatibility
+        "questions": questions or [],
+        "answers": {},
+        "current_question_index": 0,
+        "doctors": doctors,
+        "is_complete": False,
+        "created_at": datetime.utcnow().isoformat()
+    }
     
     if questions:
         first_question = questions[0]
@@ -663,4 +913,338 @@ async def start_diagnostic_session(symptoms: str, doctors: List[dict]) -> dict:
             "next_step": "answer_question"
         }
     else:
-        raise Exception("Failed to generate diagnostic questions") 
+        # If question generation failed, go directly to diagnosis
+        logger.warning(f"No questions generated for session {session_id}, proceeding to direct diagnosis")
+        try:
+            diagnosis = await generate_predictive_diagnosis(symptoms, {})
+            test_recommendations = await generate_test_recommendations(diagnosis, symptoms)
+            routing_decision = await make_routing_decision(diagnosis, test_recommendations, doctors)
+            
+            # Mark session as complete with direct diagnosis
+            diagnostic_sessions[session_id]["is_complete"] = True
+            diagnostic_sessions[session_id]["diagnosis"] = diagnosis
+            diagnostic_sessions[session_id]["decision"] = routing_decision
+            
+            return {
+                "session_id": session_id,
+                "current_question": None,
+                "questions_remaining": 0,
+                "diagnosis": diagnosis,
+                "decision": routing_decision,
+                "message": "Based on your symptoms, here's my assessment:",
+                "next_step": "review_diagnosis"
+            }
+        except Exception as e:
+            logger.error(f"Error in fallback diagnosis: {e}")
+            return {
+                "session_id": session_id,
+                "current_question": None,
+                "questions_remaining": 0,
+                "diagnosis": None,
+                "decision": None,
+                "message": "I understand your symptoms. Let me provide some general guidance.",
+                "next_step": "provide_diagnosis"
+            }
+
+# Enhanced functions with patient history context
+async def get_doctor_recommendations_with_history(
+    symptoms: str, 
+    doctors: list, 
+    patient_context: str = None,
+    session_id: str = None
+):
+    """Enhanced doctor recommendations that include patient history context"""
+    # First check if this is a conversational input rather than symptoms
+    if is_conversational_input(symptoms):
+        return get_conversational_response()
+    
+    # Use original function if no context
+    if not patient_context:
+        return await get_doctor_recommendations(symptoms, doctors)
+    
+    if not GROQ_API_KEY:
+        # Enhanced fallback with patient context consideration
+        return await get_doctor_recommendations(symptoms, doctors)
+    
+    # Prepare doctor context for the prompt
+    doctor_context = "\n".join([
+        f"ID: {doc['id']}, Name: {doc['name']}, Department: {doc['department']}, Subdivision: {doc['subdivision']}, Tags: {', '.join(doc['tags'])}" 
+        for doc in doctors
+    ])
+    
+    print(f"Calling Groq API with patient history context for session: {session_id}")
+    
+    prompt = (
+        f"You are a friendly and empathetic medical assistant helping patients find the right doctors. "
+        f"PATIENT HISTORY CONTEXT:\n{patient_context}\n\n"
+        f"CURRENT SYMPTOMS: {symptoms}\n\n"
+        f"Available doctors:\n{doctor_context}\n\n"
+        f"Based on both the patient's history and current symptoms, recommend exactly 3 most suitable doctors. "
+        f"Consider any chronic conditions, previous diagnoses, and recent symptoms from their history. "
+        f"Write in a caring, professional tone that acknowledges their medical history and current concerns. "
+        f"For each doctor, explain their expertise and why they're specifically suitable considering both current symptoms and medical history. "
+        f"Respond ONLY with a JSON array in this exact format:\n"
+        f'[{{\n'
+        f'  "id": number,\n'
+        f'  "name": "string",\n'
+        f'  "specialization": "string",\n'
+        f'  "reason": "string explaining why this doctor is suitable considering both current symptoms and patient history",\n'
+        f'  "experience": "string about doctor\'s experience",\n'
+        f'  "expertise": ["array", "of", "expertise", "areas"]\n'
+        f'}}]'
+    )
+    
+    try:
+        response = await call_groq_api(prompt)
+        
+        # Try to parse as JSON
+        try:
+            parsed = json.loads(response)
+            if isinstance(parsed, list) and len(parsed) > 0:
+                return response
+        except json.JSONDecodeError:
+            pass
+        
+        # If JSON parsing fails, extract JSON from the response
+        start_idx = response.find('[')
+        end_idx = response.rfind(']') + 1
+        if start_idx != -1 and end_idx != -1:
+            json_str = response[start_idx:end_idx]
+            try:
+                json.loads(json_str)  # Validate JSON
+                return json_str
+            except json.JSONDecodeError:
+                pass
+        
+        # If all parsing fails, use fallback
+        return await get_doctor_recommendations(symptoms, doctors)
+        
+    except Exception as e:
+        print(f"Error in Groq API call: {e}")
+        return await get_doctor_recommendations(symptoms, doctors)
+
+async def start_diagnostic_session_with_history(
+    symptoms: str, 
+    doctors: List[dict], 
+    patient_context: str = None,
+    session_id: str = None
+) -> dict:
+    """Start a diagnostic session with patient history context"""
+    
+    if not session_id:
+        session_id = str(uuid.uuid4())
+    
+    # Generate initial diagnostic questions with context
+    questions = await generate_diagnostic_questions_with_history(symptoms, session_id, patient_context)
+    
+    # Store session data
+    diagnostic_sessions[session_id] = {
+        "symptoms": symptoms,
+        "patient_context": patient_context,
+        "questions": questions,
+        "answers": {},
+        "current_question_index": 0,
+        "doctors": doctors
+    }
+    
+    if questions:
+        return {
+            "session_id": session_id,
+            "current_question": questions[0],
+            "questions_remaining": len(questions),
+            "message": "I'd like to ask you a few questions to better understand your condition and medical history.",
+            "next_step": "answer_question"
+        }
+    else:
+        # If no questions generated, proceed directly to diagnosis
+        diagnosis = await generate_predictive_diagnosis_with_history(symptoms, {}, patient_context)
+        return {
+            "session_id": session_id,
+            "diagnosis": diagnosis,
+            "message": "Based on your symptoms and medical history, here's my assessment.",
+            "next_step": "view_recommendations"
+        }
+
+async def generate_diagnostic_questions_with_history(
+    symptoms: str, 
+    session_id: str, 
+    patient_context: str = None
+) -> List[dict]:
+    """Generate diagnostic questions considering patient history"""
+    
+    if not GROQ_API_KEY:
+        # Fallback questions
+        return [
+            {
+                "question_id": 1,
+                "question": "How long have you been experiencing these symptoms?",
+                "question_type": "duration",
+                "options": ["Less than 24 hours", "1-3 days", "1 week", "More than a week"],
+                "required": True
+            },
+            {
+                "question_id": 2,
+                "question": "On a scale of 1-10, how would you rate the severity of your symptoms?",
+                "question_type": "severity",
+                "options": ["1-3 (Mild)", "4-6 (Moderate)", "7-8 (Severe)", "9-10 (Extremely severe)"],
+                "required": True
+            }
+        ]
+    
+    context_prompt = f"PATIENT HISTORY:\n{patient_context}\n\n" if patient_context else ""
+    
+    prompt = (
+        f"You are a medical diagnostic assistant. {context_prompt}"
+        f"A patient is presenting with: {symptoms}\n\n"
+        f"Generate 3-5 targeted diagnostic questions that will help determine the best course of action. "
+        f"Consider the patient's medical history when forming questions - avoid asking about things already known. "
+        f"Focus on questions that would help differentiate between possible conditions and determine urgency. "
+        f"Each question should be clear, specific, and help narrow down the diagnosis.\n\n"
+        f"Respond with a JSON array in this exact format:\n"
+        f'[{{\n'
+        f'  "question_id": 1,\n'
+        f'  "question": "Your question here?",\n'
+        f'  "question_type": "duration|severity|location|frequency|triggers|associated",\n'
+        f'  "options": ["option1", "option2", "option3", "option4"],\n'
+        f'  "required": true\n'
+        f'}}]'
+    )
+    
+    try:
+        response = await call_groq_api(prompt)
+        
+        # Try to parse as JSON
+        try:
+            questions = json.loads(response)
+            if isinstance(questions, list) and len(questions) > 0:
+                return questions
+        except json.JSONDecodeError:
+            pass
+        
+        # If JSON parsing fails, extract JSON from response
+        start_idx = response.find('[')
+        end_idx = response.rfind(']') + 1
+        if start_idx != -1 and end_idx != -1:
+            json_str = response[start_idx:end_idx]
+            try:
+                questions = json.loads(json_str)
+                if isinstance(questions, list) and len(questions) > 0:
+                    return questions
+            except json.JSONDecodeError:
+                pass
+        
+        # Fallback questions if parsing fails
+        return [
+            {
+                "question_id": 1,
+                "question": "How long have you been experiencing these symptoms?",
+                "question_type": "duration",
+                "options": ["Less than 24 hours", "1-3 days", "1 week", "More than a week"],
+                "required": True
+            },
+            {
+                "question_id": 2,
+                "question": "On a scale of 1-10, how would you rate the severity?",
+                "question_type": "severity", 
+                "options": ["1-3 (Mild)", "4-6 (Moderate)", "7-8 (Severe)", "9-10 (Extremely severe)"],
+                "required": True
+            }
+        ]
+        
+    except Exception as e:
+        print(f"Error generating diagnostic questions: {e}")
+        return [
+            {
+                "question_id": 1,
+                "question": "How long have you been experiencing these symptoms?",
+                "question_type": "duration",
+                "options": ["Less than 24 hours", "1-3 days", "1 week", "More than a week"],
+                "required": True
+            }
+        ]
+
+async def generate_predictive_diagnosis_with_history(
+    symptoms: str, 
+    answers: dict, 
+    patient_context: str = None
+) -> dict:
+    """Generate predictive diagnosis considering patient history"""
+    
+    if not GROQ_API_KEY:
+        # Enhanced fallback with context consideration
+        urgency = "medium"
+        if any(word in symptoms.lower() for word in ["chest pain", "severe", "emergency", "urgent"]):
+            urgency = "high"
+        elif any(word in symptoms.lower() for word in ["mild", "slight", "minor"]):
+            urgency = "low"
+            
+        return {
+            "possible_conditions": ["General medical condition", "Symptoms requiring evaluation"],
+            "confidence_level": "moderate",
+            "urgency_level": urgency,
+            "recommended_action": "medical consultation",
+            "explanation": f"Based on your symptoms and medical history, a medical consultation is recommended for proper evaluation."
+        }
+    
+    # Format answers for the prompt
+    answers_text = "\n".join([f"Q: {q}\nA: {a}" for q, a in answers.items()]) if answers else "No additional answers provided."
+    context_prompt = f"PATIENT MEDICAL HISTORY:\n{patient_context}\n\n" if patient_context else ""
+    
+    prompt = (
+        f"You are an experienced medical diagnostic assistant. {context_prompt}"
+        f"CURRENT SYMPTOMS: {symptoms}\n\n"
+        f"DIAGNOSTIC ANSWERS:\n{answers_text}\n\n"
+        f"Based on the patient's current symptoms, their medical history, and diagnostic answers, provide a preliminary assessment. "
+        f"Consider any chronic conditions, previous diagnoses, and how they might relate to current symptoms. "
+        f"Be thorough but acknowledge the limitations of remote diagnosis.\n\n"
+        f"Respond with JSON in this exact format:\n"
+        f'{{\n'
+        f'  "possible_conditions": ["list of 2-4 possible conditions"],\n'
+        f'  "confidence_level": "low|moderate|high",\n'
+        f'  "urgency_level": "low|medium|high|urgent",\n'
+        f'  "recommended_action": "appointment|test|emergency",\n'
+        f'  "explanation": "detailed explanation considering patient history and current symptoms"\n'
+        f'}}'
+    )
+    
+    try:
+        response = await call_groq_api(prompt)
+        
+        # Try to parse as JSON
+        try:
+            diagnosis = json.loads(response)
+            if isinstance(diagnosis, dict) and "possible_conditions" in diagnosis:
+                return diagnosis
+        except json.JSONDecodeError:
+            pass
+        
+        # Extract JSON from response if needed
+        start_idx = response.find('{')
+        end_idx = response.rfind('}') + 1
+        if start_idx != -1 and end_idx != -1:
+            json_str = response[start_idx:end_idx]
+            try:
+                diagnosis = json.loads(json_str)
+                if isinstance(diagnosis, dict) and "possible_conditions" in diagnosis:
+                    return diagnosis
+            except json.JSONDecodeError:
+                pass
+        
+        # Fallback response
+        return {
+            "possible_conditions": ["Condition requiring medical evaluation"],
+            "confidence_level": "moderate",
+            "urgency_level": "medium",
+            "recommended_action": "appointment",
+            "explanation": f"Based on your symptoms and medical history, I recommend scheduling an appointment for proper evaluation."
+        }
+        
+    except Exception as e:
+        print(f"Error generating diagnosis: {e}")
+        return {
+            "possible_conditions": ["Medical condition requiring evaluation"],
+            "confidence_level": "low",
+            "urgency_level": "medium", 
+            "recommended_action": "appointment",
+            "explanation": f"I recommend consulting with a healthcare provider about your symptoms."
+        } 

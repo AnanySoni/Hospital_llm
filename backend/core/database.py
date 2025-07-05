@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Use environment variables or default to these test credentials
+# Use environment variables or default to your existing database
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql://postgres:kev1jiph@localhost:5432/hospital_db"

@@ -3,15 +3,52 @@ Database initialization script
 Creates tables and populates with sample data
 """
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from core.models import Base, Doctor, Department, Subdivision
-from core.database import SessionLocal
+from core.database import SessionLocal, engine
 import json
+
+def apply_session_tracking_migration():
+    """Apply session tracking tables migration"""
+    db = SessionLocal()
+    try:
+        # Read the migration SQL
+        with open('../add_session_tracking_tables.sql', 'r') as f:
+            migration_sql = f.read()
+        
+        # Split into individual commands and execute
+        commands = migration_sql.split(';')
+        for command in commands:
+            command = command.strip()
+            if command:
+                try:
+                    db.execute(text(command))
+                except Exception as e:
+                    print(f"Note: {e}")  # Some commands may fail if already exists
+        
+        db.commit()
+        print("✅ Session tracking migration applied successfully!")
+        
+    except FileNotFoundError:
+        print("ℹ️ Session tracking migration file not found, skipping...")
+    except Exception as e:
+        print(f"❌ Error applying session tracking migration: {e}")
+        db.rollback()
+    finally:
+        db.close()
 
 def init_database():
     # Create all tables
-    Base.metadata.create_all(bind=create_engine("postgresql://postgres:password@localhost/hospital_appointments"))
-    print("✅ Tables created successfully!")
+    try:
+        Base.metadata.create_all(bind=engine)
+        print("✅ Tables created successfully!")
+        
+        # Apply session tracking tables migration
+        apply_session_tracking_migration()
+        
+    except Exception as e:
+        print(f"❌ Error creating tables: {e}")
+        print("ℹ️ Continuing with existing database...")
     
     # Add sample data
     db = SessionLocal()

@@ -21,7 +21,21 @@ from .request_models import (
     RouterDecision,
     RouterResponse,
     TestBookingRequest,
-    TestBookingResponse
+    TestBookingResponse,
+    # New session-based user tracking schemas
+    SessionUserCreate,
+    SessionUserResponse,
+    PatientHistoryCreate,
+    PatientHistoryResponse,
+    EnhancedChatRequest,
+    SessionHistoryResponse,
+    # Phone-based recognition schemas
+    PhoneRecognitionRequest,
+    SmartWelcomeRequest,
+    SymptomAnalysisRequest,
+    PatientProfileResponse,
+    SmartWelcomeResponse,
+    PhoneBasedChatRequest
 )
 
 __all__ = [
@@ -43,5 +57,19 @@ __all__ = [
     "RouterDecision",
     "RouterResponse",
     "TestBookingRequest",
-    "TestBookingResponse"
+    "TestBookingResponse",
+    # New session-based user tracking schemas
+    "SessionUserCreate",
+    "SessionUserResponse",
+    "PatientHistoryCreate",
+    "PatientHistoryResponse",
+    "EnhancedChatRequest",
+    "SessionHistoryResponse",
+    # Phone-based recognition schemas
+    "PhoneRecognitionRequest",
+    "SmartWelcomeRequest",
+    "SymptomAnalysisRequest",
+    "PatientProfileResponse",
+    "SmartWelcomeResponse",
+    "PhoneBasedChatRequest"
 ] 

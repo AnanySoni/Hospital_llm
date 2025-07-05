@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Doctor, AppointmentData } from '../types';
+import { Doctor, AppointmentData, PatientProfile } from '../types';
 
 interface TimeSlot {
   id: number;
@@ -12,13 +12,16 @@ interface AppointmentFormProps {
   doctor: Doctor;
   onSubmit: (data: AppointmentData) => void;
   onCancel: () => void;
+  patientProfile?: PatientProfile | null;
+  symptoms?: string;
 }
 
-const AppointmentForm: React.FC<AppointmentFormProps> = ({ doctor, onSubmit, onCancel }) => {
-  const [patientName, setPatientName] = useState('');
+const AppointmentForm: React.FC<AppointmentFormProps> = ({ doctor, onSubmit, onCancel, patientProfile, symptoms }) => {
+  const [patientName, setPatientName] = useState(patientProfile?.first_name || '');
+  const [phoneNumber, setPhoneNumber] = useState(patientProfile?.phone_number || '');
   const [appointmentDate, setAppointmentDate] = useState('');
   const [appointmentTime, setAppointmentTime] = useState('');
-  const [notes, setNotes] = useState('');
+  const [notes, setNotes] = useState(symptoms || '');
   const [availableSlots, setAvailableSlots] = useState<TimeSlot[]>([]);
   const [isLoadingSlots, setIsLoadingSlots] = useState(false);
 
@@ -53,10 +56,11 @@ const AppointmentForm: React.FC<AppointmentFormProps> = ({ doctor, onSubmit, onC
     onSubmit({
       doctor_id: doctor.id,
       patient_name: patientName,
+      phone_number: phoneNumber,
       appointment_date: appointmentDate,
       appointment_time: appointmentTime,
       notes: notes,
-      symptoms: '', // This might need to be sourced from the diagnostic session state
+      symptoms: symptoms || notes, // Use provided symptoms or notes
     });
   };
 
@@ -74,6 +78,15 @@ const AppointmentForm: React.FC<AppointmentFormProps> = ({ doctor, onSubmit, onC
           value={patientName}
           onChange={(e) => setPatientName(e.target.value)}
           placeholder="Full Name"
+          required
+          className="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm focus:ring-blue-500 focus:border-blue-500"
+        />
+        
+        <input
+          type="tel"
+          value={phoneNumber}
+          onChange={(e) => setPhoneNumber(e.target.value)}
+          placeholder="Phone Number"
           required
           className="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm focus:ring-blue-500 focus:border-blue-500"
         />

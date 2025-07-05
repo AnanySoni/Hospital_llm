@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Message, Doctor, AppointmentData, TestRecommendation } from '../types';
 import DoctorCard from './DoctorCard';
 import AppointmentForm from './AppointmentForm';
 import RescheduleForm from './RescheduleForm';
 import TestCard from './TestCard';
 import TestBookingForm from './TestBookingForm';
+import ConfidenceIndicator from './ConfidenceIndicator';
+import ConsequenceAlert from './ConsequenceAlert';
 
 interface MessageBubbleProps {
   message: Message;
@@ -19,6 +21,7 @@ interface MessageBubbleProps {
   onRescheduleSubmit?: (appointmentId: number, newDate: string, newTime: string) => void;
   onRescheduleCancel?: () => void;
   onCancelAppointment?: (appointmentId: number) => void;
+  onCancelTest?: (bookingId: string) => void;
   isLoading?: boolean;
 }
 
@@ -35,6 +38,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   onRescheduleSubmit,
   onRescheduleCancel,
   onCancelAppointment,
+  onCancelTest,
   isLoading = false,
 }) => {
   const isUser = message.role === 'user';
@@ -65,7 +69,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
     switch (message.type) {
       case 'diagnostic_question':
         if (!message.question) return null;
-        return (
+    return (
           <div className="bg-chat-assistant rounded-2xl px-4 py-3">
             <p className="text-sm leading-relaxed text-gray-100 mb-3">{message.question.question}</p>
             {message.question.options && (
@@ -86,18 +90,50 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
       
       case 'diagnostic_result':
         if (!message.diagnosticResult) return null;
-        const { diagnosis, decision } = message.diagnosticResult;
+        const { diagnosis, confidence } = message.diagnosticResult;
         return (
           <div className="bg-chat-assistant rounded-2xl p-4 text-white">
             <p className="text-sm leading-relaxed text-gray-100 mb-3">{message.content}</p>
+            
+            {/* Overall Confidence Indicator */}
+            {confidence && (
+              <div className="mb-4">
+                <ConfidenceIndicator confidence={confidence} showDetails={true} />
+              </div>
+            )}
+            
             {diagnosis && (
               <div className="bg-gray-800 rounded-lg p-3 mb-3">
-                <h4 className="font-bold mb-2 text-gray-100">Preliminary Diagnosis</h4>
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="font-bold text-gray-100">Preliminary Diagnosis</h4>
+                  {diagnosis.diagnostic_confidence && (
+                    <ConfidenceIndicator confidence={diagnosis.diagnostic_confidence} compact={true} />
+                  )}
+                </div>
                 <p className="text-sm text-gray-300 mb-2">{diagnosis.explanation}</p>
                 <div className="grid grid-cols-2 gap-2 text-sm">
                   <p><strong className="text-gray-400">Conditions:</strong> {diagnosis.possible_conditions.join(', ')}</p>
                   <p><strong className="text-gray-400">Urgency:</strong> {diagnosis.urgency_level}</p>
                 </div>
+              </div>
+            )}
+            
+            {/* NEW: Consequence Messaging (Phase 1 Implementation) */}
+            {message.diagnosticResult?.consequence_message && (
+              <div className="mt-4 mb-4">
+                <ConsequenceAlert
+                  consequenceMessage={message.diagnosticResult.consequence_message}
+                  riskProgression={message.diagnosticResult.risk_progression}
+                  persuasionMetrics={message.diagnosticResult.persuasion_metrics}
+                  onActionClick={() => {
+                    // Route to appropriate action based on risk level
+                    if (message.diagnosticResult?.consequence_message?.risk_level === 'urgent') {
+                      onQuickReply?.('I want to book an appointment with a doctor');
+                    } else {
+                      onQuickReply?.('I want to book medical tests');
+                    }
+                  }}
+                />
               </div>
             )}
             
@@ -128,13 +164,19 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
             <div className="bg-chat-assistant rounded-2xl px-4 py-3 mb-3"><p>{message.content}</p></div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
               {message.doctors?.map(doc => <DoctorCard key={doc.id} doctor={doc} onSelect={() => onDoctorSelect?.(doc)} />)}
-            </div>
-          </div>
-        );
+        </div>
+      </div>
+    );
 
       case 'appointment-form':
         return message.selectedDoctor && onAppointmentSubmit ? (
-          <AppointmentForm doctor={message.selectedDoctor} onSubmit={onAppointmentSubmit} onCancel={()=>{}} />
+            <AppointmentForm
+              doctor={message.selectedDoctor}
+            onSubmit={onAppointmentSubmit} 
+            onCancel={()=>{}} 
+            patientProfile={message.patientProfile}
+            symptoms={message.symptoms}
+          />
         ) : null;
 
       case 'appointment-success':
@@ -143,12 +185,12 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
             <div className="flex items-start gap-3 mb-3">
               <div className="w-8 h-8 bg-green-600 rounded-full flex items-center justify-center flex-shrink-0">
                 <i className="fas fa-check text-white text-sm"></i>
-              </div>
+          </div>
               <div className="flex-1">
                 <h4 className="font-bold text-green-400 mb-1">Appointment Confirmed!</h4>
                 <p className="text-sm text-gray-300">{message.content}</p>
-              </div>
-            </div>
+        </div>
+      </div>
             
             <div className="bg-gray-800/50 rounded-lg p-3 mb-3">
               <div className="grid grid-cols-2 gap-2 text-sm">
@@ -162,8 +204,8 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                   <strong className="text-gray-400">Notes:</strong> {message.appointment.notes}
                 </p>
               )}
-            </div>
-            
+          </div>
+
             <div className="flex gap-2">
               <button 
                 onClick={() => onRescheduleAppointment?.(message.appointment!.id)}
@@ -179,16 +221,16 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
                 <i className="fas fa-times text-xs"></i>
                 Cancel
               </button>
-            </div>
+      </div>
           </div>
         ) : null;
 
       case 'reschedule-form':
         return message.appointment ? (
-          <RescheduleForm 
-            appointment={message.appointment} 
-            onSubmit={onRescheduleSubmit || (() => {})} 
-            onCancel={onRescheduleCancel || (() => {})} 
+            <RescheduleForm
+              appointment={message.appointment}
+              onSubmit={onRescheduleSubmit || (() => {})}
+              onCancel={onRescheduleCancel || (() => {})}
             isLoading={isLoading}
           />
         ) : null;
@@ -236,23 +278,87 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
       
       case 'test_form':
           return message.selectedTests && onTestSubmit ? (
-              <TestBookingForm recommendedTests={message.selectedTests} onBookingComplete={onTestSubmit} onBack={() => {}} />
+              <TestBookingForm 
+                selectedTests={message.selectedTests} 
+                onSubmit={onTestSubmit} 
+                onCancel={() => {}}
+                patientProfile={message.patientProfile}
+                symptoms={message.symptoms}
+              />
           ) : null;
+
+      case 'test-success':
+        return message.testBooking ? (
+          <div className="bg-green-900/30 border border-green-600/50 rounded-2xl p-4 text-white">
+            <div className="flex items-start gap-3 mb-3">
+              <div className="w-8 h-8 bg-green-600 rounded-full flex items-center justify-center flex-shrink-0">
+                <i className="fas fa-check text-white text-sm"></i>
+              </div>
+              <div className="flex-1">
+                <h4 className="font-bold text-green-400 mb-1">Tests Booked Successfully!</h4>
+                <p className="text-sm text-gray-300">{message.content}</p>
+              </div>
+            </div>
+            
+            <div className="bg-gray-800/50 rounded-lg p-3 mb-3">
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                <p><strong className="text-gray-400">Booking ID:</strong> {message.testBooking.booking_id}</p>
+                <p><strong className="text-gray-400">Patient:</strong> {message.testBooking.patient_name}</p>
+                <p><strong className="text-gray-400">Date:</strong> {message.testBooking.appointment_date}</p>
+                <p><strong className="text-gray-400">Time:</strong> {message.testBooking.appointment_time}</p>
+                <p><strong className="text-gray-400">Total Cost:</strong> {message.testBooking.total_cost}</p>
+                <p><strong className="text-gray-400">Status:</strong> <span className="text-green-400 capitalize">{message.testBooking.status}</span></p>
+              </div>
+              
+              <div className="mt-3">
+                <p className="text-sm text-gray-400 mb-2"><strong>Tests Booked:</strong></p>
+                <ul className="list-disc list-inside text-sm text-gray-300 space-y-1">
+                  {message.testBooking.tests_booked.map((test, index) => (
+                    <li key={index}>{test}</li>
+                  ))}
+                </ul>
+              </div>
+
+              {message.testBooking.preparation_instructions && message.testBooking.preparation_instructions.length > 0 && (
+                <div className="mt-3">
+                  <p className="text-sm text-gray-400 mb-2"><strong>Preparation Instructions:</strong></p>
+                  <ul className="list-disc list-inside text-sm text-gray-300 space-y-1">
+                    {message.testBooking.preparation_instructions.map((instruction, index) => (
+                      <li key={index}>{instruction}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-2">
+              <button 
+                onClick={() => onCancelTest?.(message.testBooking!.booking_id)}
+                className="bg-red-600 hover:bg-red-700 text-white text-sm font-medium py-1.5 px-3 rounded-lg flex items-center gap-1"
+              >
+                <i className="fas fa-times text-xs"></i>
+                Cancel Booking
+              </button>
+            </div>
+          </div>
+        ) : null;
+
+
 
       default:
         return (
             <div className={`rounded-2xl px-4 py-3 ${isUser ? 'bg-blue-600 text-white' : 'bg-chat-assistant text-gray-100'}`}>
                 <p className="text-sm leading-relaxed">{message.content}</p>
-            </div>
-        );
-    }
+      </div>
+    );
+  }
   };
 
   return (
     <div className={`flex items-start gap-3 ${isUser ? 'justify-end' : 'justify-start'}`}>
       {!isUser && (
         <div className="w-8 h-8 rounded-full flex-shrink-0 bg-green-600 flex items-center justify-center">
-          <i className="fas fa-robot text-white text-sm"></i>
+            <i className="fas fa-robot text-white text-sm"></i>
         </div>
       )}
       <div className={`max-w-xl ${isUser ? '' : 'flex-grow'}`}>{renderContent()}</div>
