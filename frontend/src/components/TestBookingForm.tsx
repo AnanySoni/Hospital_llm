@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
-import { TestRecommendation } from '../types';
+import { TestRecommendation, PatientProfile, SmartWelcomeResponse } from '../types';
 
 interface TestBookingFormProps {
   selectedTests: TestRecommendation[];
   onSubmit: (bookingData: any) => void;
   onCancel: () => void;
-  patientProfile?: any;
+  patientProfile?: PatientProfile;
   symptoms?: string;
+  onPatientRecognized?: (smartWelcomeResponse: SmartWelcomeResponse) => void;
 }
 
 const TestBookingForm: React.FC<TestBookingFormProps> = ({
@@ -14,7 +15,8 @@ const TestBookingForm: React.FC<TestBookingFormProps> = ({
   onSubmit,
   onCancel,
   patientProfile,
-  symptoms
+  symptoms,
+  onPatientRecognized
 }) => {
   const [formData, setFormData] = useState({
     patient_name: patientProfile?.first_name || '',
@@ -25,6 +27,9 @@ const TestBookingForm: React.FC<TestBookingFormProps> = ({
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [phoneError, setPhoneError] = useState('');
+  const [isPhoneValidated, setIsPhoneValidated] = useState(!!patientProfile?.phone_number);
+  const [recognizedPatient, setRecognizedPatient] = useState<PatientProfile | null>(patientProfile || null);
 
   const getTotalCost = () => {
     return selectedTests.reduce((total, test) => total + (test.cost || 0), 0);
@@ -36,10 +41,111 @@ const TestBookingForm: React.FC<TestBookingFormProps> = ({
     return tomorrow.toISOString().split('T')[0];
   };
 
+  // Validate Indian phone numbers
+  const validateIndianPhone = (phone: string): boolean => {
+    const cleanPhone = phone.replace(/[\s\-()]/g, '');
+    const indianPhoneRegex = /^(?:\+91|91)?[6-9]\d{9}$/;
+    return indianPhoneRegex.test(cleanPhone);
+  };
+
+  // Format phone number to standard Indian format
+  const formatIndianPhone = (phone: string): string => {
+    const cleanPhone = phone.replace(/[\s\-()]/g, '');
+    if (cleanPhone.startsWith('+91')) {
+      return cleanPhone.substring(3);
+    } else if (cleanPhone.startsWith('91') && cleanPhone.length === 12) {
+      return cleanPhone.substring(2);
+    }
+    return cleanPhone;
+  };
+
+  // Handle phone number validation and recognition
+  const handlePhoneBlur = async () => {
+    if (!formData.contact_number) return;
+
+    const isValid = validateIndianPhone(formData.contact_number);
+    if (!isValid) {
+      setPhoneError('Please enter a valid Indian mobile number (10 digits starting with 6, 7, 8, or 9)');
+      setIsPhoneValidated(false);
+      return;
+    }
+
+    setPhoneError('');
+    const formattedPhone = formatIndianPhone(formData.contact_number);
+    setFormData(prev => ({ ...prev, contact_number: formattedPhone }));
+
+    // If we already have a patient profile with this phone number, skip recognition
+    if (recognizedPatient?.phone_number === formattedPhone) {
+      setIsPhoneValidated(true);
+      return;
+    }
+
+    try {
+      // Call phone recognition API
+      const response = await fetch('http://localhost:8000/phone-recognition', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone_number: formattedPhone }),
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        
+        if (result.patient_found && result.patient_profile) {
+          // Found existing patient
+          setRecognizedPatient(result.patient_profile);
+          setFormData(prev => ({ 
+            ...prev, 
+            patient_name: result.patient_profile.first_name 
+          }));
+          setIsPhoneValidated(true);
+          
+          // Generate smart welcome if handler provided
+          if (onPatientRecognized) {
+            try {
+              const smartWelcomeResponse = await fetch('http://localhost:8000/smart-welcome', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  phone_number: formattedPhone,
+                  symptoms: symptoms || '',
+                  session_id: `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+                }),
+              });
+
+              if (smartWelcomeResponse.ok) {
+                const smartWelcomeData = await smartWelcomeResponse.json();
+                onPatientRecognized(smartWelcomeData);
+              }
+            } catch (error) {
+              console.error('Smart welcome error:', error);
+            }
+          }
+        } else {
+          // New patient
+          setIsPhoneValidated(true);
+          setRecognizedPatient(null);
+        }
+      } else {
+        setIsPhoneValidated(true); // Allow booking even if recognition fails
+      }
+    } catch (error) {
+      console.error('Phone recognition error:', error);
+      setIsPhoneValidated(true); // Allow booking even if recognition fails
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
     setError(null);
+
+    // Final validation
+    if (!isPhoneValidated || phoneError) {
+      setError('Please enter a valid phone number');
+      setIsSubmitting(false);
+      return;
+    }
 
     try {
       const testIds = selectedTests.map(test => test.test_id);
@@ -108,9 +214,20 @@ const TestBookingForm: React.FC<TestBookingFormProps> = ({
               required
               value={formData.contact_number}
               onChange={(e) => setFormData({...formData, contact_number: e.target.value})}
+              onBlur={handlePhoneBlur}
               className="w-full bg-gray-700 border border-gray-600 rounded-lg px-3 py-2 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
               placeholder="Enter contact number"
             />
+            {phoneError && (
+              <div className="text-red-400 text-sm mt-1">
+                {phoneError}
+              </div>
+            )}
+            {recognizedPatient && (
+              <div className="text-green-400 text-sm mt-1">
+                ✓ Welcome back, {recognizedPatient.first_name}! (Visit #{recognizedPatient.total_visits})
+              </div>
+            )}
           </div>
 
           <div>
@@ -175,7 +292,7 @@ const TestBookingForm: React.FC<TestBookingFormProps> = ({
           </button>
           <button
             type="submit"
-            disabled={isSubmitting}
+            disabled={isSubmitting || !isPhoneValidated || !!phoneError}
             className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium py-2 px-4 rounded-lg transition-colors"
           >
             {isSubmitting ? 'Booking...' : `Book Tests (₹${getTotalCost().toLocaleString()})`}

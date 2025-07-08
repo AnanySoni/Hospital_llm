@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 
 interface ConsequenceMessage {
   primary_consequence: string;
@@ -29,17 +29,13 @@ interface ConsequenceAlertProps {
   consequenceMessage?: ConsequenceMessage;
   riskProgression?: RiskProgression;
   persuasionMetrics?: PersuasionMetrics;
-  onActionClick?: () => void;
 }
 
 const ConsequenceAlert: React.FC<ConsequenceAlertProps> = ({
   consequenceMessage,
   riskProgression,
-  persuasionMetrics,
-  onActionClick
+  persuasionMetrics
 }) => {
-  const [showDetails, setShowDetails] = useState(false);
-
   if (!consequenceMessage) return null;
 
   const getRiskLevelStyling = (riskLevel: string) => {
@@ -78,9 +74,9 @@ const ConsequenceAlert: React.FC<ConsequenceAlertProps> = ({
 
   return (
     <div className={`p-4 rounded-lg ${styling.container} my-4 shadow-md`}>
-      {/* Main consequence header */}
+      {/* Compact main message */}
       <div className="flex items-start space-x-3">
-        <div className={`text-2xl ${styling.iconColor}`}>
+        <div className={`text-xl ${styling.iconColor} flex-shrink-0`}>
           {styling.icon}
         </div>
         <div className="flex-1">
@@ -90,114 +86,18 @@ const ConsequenceAlert: React.FC<ConsequenceAlertProps> = ({
           </div>
           
           {/* Primary consequence message */}
-          <div className={`text-lg font-semibold ${styling.textColor} mb-3`}>
+          <div className={`text-base font-semibold ${styling.textColor} mb-2`}>
             {consequenceMessage.primary_consequence}
           </div>
           
           {/* Timeframe */}
-          <div className={`text-md ${styling.textColor} mb-3 font-medium`}>
+          <div className={`text-sm ${styling.textColor} mb-2`}>
             ⏰ Action needed: {consequenceMessage.timeframe}
           </div>
           
-          {/* Action benefits */}
-          <div className={`text-md ${styling.textColor} mb-4`}>
+          {/* Action benefits - single line */}
+          <div className={`text-sm ${styling.textColor} mb-3`}>
             ✅ {consequenceMessage.action_benefits}
-          </div>
-          
-          {/* Escalation risks preview */}
-          {consequenceMessage.escalation_risks.length > 0 && (
-            <div className={`text-sm ${styling.textColor} mb-3`}>
-              <span className="font-medium">Risks if delayed:</span>
-              <ul className="list-disc list-inside mt-1">
-                <li>{consequenceMessage.escalation_risks[0]}</li>
-                {consequenceMessage.escalation_risks.length > 1 && (
-                  <li>
-                    and {consequenceMessage.escalation_risks.length - 1} more...
-                    <button
-                      onClick={() => setShowDetails(!showDetails)}
-                      className={`ml-1 underline ${styling.textColor} hover:opacity-75`}
-                    >
-                      {showDetails ? 'show less' : 'see all'}
-                    </button>
-                  </li>
-                )}
-              </ul>
-            </div>
-          )}
-          
-          {/* Expandable details */}
-          {showDetails && (
-            <div className={`mt-4 p-3 bg-white bg-opacity-50 rounded-md ${styling.textColor}`}>
-              {/* Complete risk list */}
-              {consequenceMessage.escalation_risks.length > 1 && (
-                <div className="mb-3">
-                  <h4 className="font-semibold mb-2">Complete risk assessment:</h4>
-                  <ul className="list-disc list-inside space-y-1">
-                    {consequenceMessage.escalation_risks.slice(1).map((risk, index) => (
-                      <li key={index}>{risk}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              
-              {/* Risk progression timeline */}
-              {riskProgression && (
-                <div className="mb-3">
-                  <h4 className="font-semibold mb-2">Risk timeline:</h4>
-                  <div className="space-y-2 text-sm">
-                    <div>📍 <strong>Immediate:</strong> {riskProgression.immediate_risk}</div>
-                    <div>📈 <strong>Short-term:</strong> {riskProgression.short_term_risk}</div>
-                    <div>📊 <strong>Long-term:</strong> {riskProgression.long_term_risk}</div>
-                    <div>🎯 <strong>Optimal window:</strong> {riskProgression.prevention_window}</div>
-                  </div>
-                </div>
-              )}
-              
-              {/* Social proof */}
-              {consequenceMessage.social_proof && (
-                <div className="mb-3">
-                  <h4 className="font-semibold mb-1">Medical evidence:</h4>
-                  <p className="text-sm italic">{consequenceMessage.social_proof}</p>
-                </div>
-              )}
-              
-              {/* Regret prevention */}
-              {consequenceMessage.regret_prevention && (
-                <div className="mb-3">
-                  <h4 className="font-semibold mb-1">Patient experience:</h4>
-                  <p className="text-sm italic">{consequenceMessage.regret_prevention}</p>
-                </div>
-              )}
-              
-              {/* Opportunity cost */}
-              {consequenceMessage.opportunity_cost && (
-                <div className="mb-3">
-                  <h4 className="font-semibold mb-1">Cost of waiting:</h4>
-                  <p className="text-sm">{consequenceMessage.opportunity_cost}</p>
-                </div>
-              )}
-            </div>
-          )}
-          
-          {/* Action button */}
-          <div className="mt-4">
-            <button
-              onClick={onActionClick}
-              className={`w-full ${styling.buttonColor} text-white font-semibold py-3 px-6 rounded-lg transition-colors duration-200 shadow-md hover:shadow-lg`}
-            >
-              {consequenceMessage.risk_level === 'emergency' 
-                ? 'Get Emergency Care Now' 
-                : consequenceMessage.risk_level === 'urgent'
-                ? 'Book Appointment Today'
-                : 'Schedule Consultation'}
-            </button>
-          </div>
-          
-          {/* Reassurance text */}
-          <div className={`mt-2 text-xs ${styling.textColor} text-center opacity-75`}>
-            {consequenceMessage.risk_level === 'emergency' 
-              ? 'Taking immediate action is the best choice for your health'
-              : 'Early action leads to better outcomes and peace of mind'}
           </div>
         </div>
       </div>

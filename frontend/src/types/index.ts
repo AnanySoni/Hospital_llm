@@ -412,3 +412,29 @@ export interface TriageRequest {
   symptom_duration?: string;
   vital_signs?: Record<string, any>;
 } 
+
+// Progress Sidebar Types
+export interface ProgressStep {
+  id: string;
+  title: string;
+  icon: string;
+  status: 'waiting' | 'active' | 'completed' | 'error';
+  subSteps?: ProgressStep[];
+  timestamp?: Date;
+  description?: string;
+}
+
+export interface ProgressState {
+  currentStep: string;
+  steps: ProgressStep[];
+  isVisible: boolean;
+  startTime?: Date;
+}
+
+export interface ProgressContextType {
+  progressState: ProgressState;
+  updateStep: (stepId: string, status: ProgressStep['status']) => void;
+  setCurrentStep: (stepId: string) => void;
+  resetProgress: () => void;
+  toggleVisibility: () => void;
+} 

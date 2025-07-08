@@ -218,6 +218,11 @@ def get_doctor_credentials(doctor: models.Doctor):
 async def create_calendar_event(doctor: models.Doctor, appointment_data: dict, db: Session, is_reschedule=False, is_cancellation=False):
     """Create, update or cancel a Google Calendar event for an appointment."""
     try:
+        print(f"🗓️ Starting calendar operation for Dr. {doctor.name}")
+        print(f"   - Operation: {'Reschedule' if is_reschedule else 'Cancel' if is_cancellation else 'Create'}")
+        print(f"   - Patient: {appointment_data['patient_name']}")
+        print(f"   - Date: {appointment_data['date']}")
+        
         credentials = get_doctor_credentials(doctor)
         if not credentials:
             print(f"❌ No Google Calendar credentials found for doctor {doctor.name}")
@@ -231,22 +236,43 @@ async def create_calendar_event(doctor: models.Doctor, appointment_data: dict, d
             # Search for events on the original date (for reschedules) or current date (for cancellations)
             search_date = appointment_data.get('old_date', appointment_data['date']) if is_reschedule else appointment_data['date']
             
+            # Use patient name as the search term, but also search by appointment title
+            search_queries = [
+                appointment_data['patient_name'],
+                f"Appointment - {appointment_data['patient_name']}",
+                appointment_data['patient_name'].split()[0]  # First name only
+            ]
+            
+            existing_event = None
+            for search_query in search_queries:
             events_result = service.events().list(
                 calendarId='primary',
                 timeMin=f"{search_date}T00:00:00Z",
                 timeMax=f"{search_date}T23:59:59Z",
-                q=appointment_data['patient_name']  # Search by patient name
+                    q=search_query
             ).execute()
             
             events = events_result.get('items', [])
-            if not events:
+                if events:
+                    # Find the most likely match
+                    for event in events:
+                        event_title = event.get('summary', '')
+                        event_description = event.get('description', '')
+                        if (appointment_data['patient_name'].lower() in event_title.lower() or 
+                            appointment_data['patient_name'].lower() in event_description.lower()):
+                            existing_event = event
+                            break
+                    if existing_event:
+                        break
+            
+            if not existing_event:
                 print(f"⚠️ No matching calendar event found for {appointment_data['patient_name']} on {search_date}")
                 if is_cancellation:
                     return True  # If we're cancelling and there's no event, that's fine
                 # For reschedules, continue to create new event
             else:
-                existing_event = events[0]
                 event_id = existing_event['id']
+                print(f"✅ Found existing calendar event: {existing_event.get('summary', 'No title')}")
                 
                 if is_cancellation:
                     # Delete the event for cancellations
@@ -300,7 +326,7 @@ async def create_calendar_event(doctor: models.Doctor, appointment_data: dict, d
                 'colorId': '1',  # Blue for all active appointments
             }
             
-            if is_reschedule and events:
+            if is_reschedule and existing_event:
                 # Update existing event
                 service.events().update(
                     calendarId='primary',

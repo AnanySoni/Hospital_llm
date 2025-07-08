@@ -4,11 +4,14 @@
 
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+  font-family: 'Inter', 'Segoe UI', 'Roboto', 'Oxygen',
     'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
     sans-serif;
+  font-size: 17px;
+  line-height: 1.7;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  background: #181A20;
 }
 
 /* Custom scrollbar */
@@ -58,4 +61,223 @@ body {
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+/* Progress sidebar animations */
+@keyframes progressPulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.progress-pulse {
+  animation: progressPulse 2s infinite;
+}
+
+@keyframes checkmarkAppear {
+  0% {
+    transform: scale(0);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.checkmark-appear {
+  animation: checkmarkAppear 0.5s ease-out;
+}
+
+/* Progress step transitions */
+.progress-step-enter {
+  opacity: 0;
+  transform: translateX(-10px);
+}
+
+.progress-step-enter-active {
+  opacity: 1;
+  transform: translateX(0);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.progress-step-exit {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.progress-step-exit-active {
+  opacity: 0;
+  transform: translateX(10px);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+/* Enhanced typography for full-width messages */
+.prose-invert {
+  @apply text-gray-300;
+}
+
+.prose-invert h1, .prose-invert h2, .prose-invert h3, .prose-invert h4, .prose-invert h5, .prose-invert h6 {
+  @apply text-white font-semibold;
+}
+
+.prose-invert h1 {
+  @apply text-2xl mb-4;
+}
+
+.prose-invert h2 {
+  @apply text-xl mb-3;
+}
+
+.prose-invert h3 {
+  @apply text-lg mb-3;
+}
+
+.prose-invert h4 {
+  @apply text-base mb-2;
+}
+
+.prose-invert p {
+  @apply text-gray-300 leading-relaxed mb-3;
+}
+
+.prose-invert ul {
+  @apply space-y-2 mb-4;
+}
+
+.prose-invert li {
+  @apply text-gray-300;
+}
+
+.prose-invert strong {
+  @apply text-white font-medium;
+}
+
+.prose-invert em {
+  @apply text-gray-400 italic;
+}
+
+/* Full-width message styling */
+.message-full-width {
+  @apply w-full bg-gray-800 border-b border-gray-700;
+}
+
+.message-content {
+  @apply max-w-4xl mx-auto;
+}
+
+.message-header {
+  @apply flex items-center space-x-3 p-6 pb-4;
+}
+
+.message-body {
+  @apply px-6 pb-6;
+}
+
+/* Enhanced spacing for medical content */
+.medical-section {
+  @apply bg-gray-700 rounded-lg p-6 mb-6;
+}
+
+.medical-header {
+  @apply text-lg font-semibold text-white mb-4 flex items-center;
+}
+
+.medical-grid {
+  @apply grid md:grid-cols-2 gap-6;
+}
+
+.medical-detail {
+  @apply space-y-2;
+}
+
+.medical-label {
+  @apply text-sm text-gray-400 font-medium;
+}
+
+.medical-value {
+  @apply text-white;
+}
+
+/* Action buttons */
+.action-button {
+  @apply bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-lg shadow transition-colors duration-200;
+}
+
+.action-button-secondary {
+  @apply bg-gray-600 hover:bg-gray-700 text-white font-semibold py-2 px-4 rounded-lg shadow transition-colors duration-200;
+}
+
+.action-button-danger {
+  @apply bg-red-600 hover:bg-red-700 text-white font-semibold py-2 px-4 rounded-lg shadow transition-colors duration-200;
+}
+
+/* Zoom-responsive styles for better compatibility */
+@media screen and (min-width: 1024px) {
+  .zoom-responsive {
+    font-size: clamp(14px, 1vw, 16px);
+  }
+}
+
+/* High zoom level adjustments (equivalent to 110%+ zoom) */
+@media screen and (max-width: 1400px) {
+  .sidebar-compact {
+    width: 14rem !important; /* 224px instead of 256px */
+  }
+  
+  .text-responsive {
+    font-size: 0.875rem !important; /* 14px */
+  }
+  
+  .padding-compact {
+    padding: 0.5rem !important;
+  }
+}
+
+/* Very high zoom level adjustments (equivalent to 125%+ zoom) */
+@media screen and (max-width: 1200px) {
+  .sidebar-compact {
+    width: 12rem !important; /* 192px */
+  }
+  
+  .header-compact {
+    padding: 0.25rem 0.5rem !important;
+  }
+  
+  .text-responsive {
+    font-size: 0.75rem !important; /* 12px */
+  }
+}
+
+/* Ensure full height is always maintained */
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Container responsive scaling */
+.app-container {
+  min-height: 100vh;
+  max-height: 100vh;
+  overflow: hidden;
+}
+
+/* Flex container improvements for zoom compatibility */
+.flex-container-zoom {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+}
+
+.flex-item-zoom {
+  min-width: 0;
+  min-height: 0;
 } 

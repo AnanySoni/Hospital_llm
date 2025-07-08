@@ -265,11 +265,11 @@ Respond ONLY with valid JSON:
         
         # Customize primary consequence based on risk level and diseases
         if risk_level == "emergency":
-            primary_msg = f"🚨 URGENT: Your symptoms may indicate serious conditions such as {diseases_text}. Immediate medical attention is critical."
+            primary_msg = f"🚨 URGENT: Your symptoms may indicate {diseases_text}. Immediate medical attention is critical."
         elif risk_level == "urgent":
-            primary_msg = f"⚠️ Important: Your symptoms require prompt evaluation to rule out conditions like {diseases_text}."
+            primary_msg = f"⚠️ Important: Your symptoms require prompt evaluation to rule out {diseases_text}."
         else:
-            primary_msg = f"💡 Your symptoms should be evaluated to check for conditions such as {diseases_text}."
+            primary_msg = f"💡 Your symptoms should be evaluated to check for {diseases_text}."
         
         return {
             "consequence_message": {
@@ -313,7 +313,7 @@ Respond ONLY with valid JSON:
         
         return {
             "emergency": {
-                "primary_consequence": "⚠️ URGENT: {conditions} can be life-threatening and requires immediate medical attention",
+                "primary_consequence": "⚠️ URGENT: {conditions} requires immediate medical attention",
                 "timeframe": "Within the next 1-2 hours",
                 "escalation_risks": [
                     "Rapid deterioration of condition",
@@ -332,7 +332,7 @@ Respond ONLY with valid JSON:
                 }
             },
             "urgent": {
-                "primary_consequence": "🚨 Important: {conditions} can lead to serious complications if not treated promptly",
+                "primary_consequence": "🚨 Important: {conditions} requires prompt medical attention",
                 "timeframe": "Within the next 24-48 hours",
                 "escalation_risks": [
                     "Worsening of symptoms",

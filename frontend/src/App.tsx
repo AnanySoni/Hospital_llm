@@ -1,35 +1,75 @@
 import React, { useState } from 'react';
 import ChatContainer from './components/ChatContainer';
 import GoogleCalendarConnect from './components/GoogleCalendarConnect';
+import ProgressSidebar from './components/ProgressSidebar';
+import ProgressToggle from './components/ProgressToggle';
+import MobileProgressBar from './components/MobileProgressBar';
+import { ProgressProvider, useProgress } from './contexts/ProgressContext';
 
-function App() {
+function AppContent() {
   const [isCalendarConnected, setIsCalendarConnected] = useState(false);
+  const { progressState } = useProgress();
+  const [clearChatFlag, setClearChatFlag] = useState(false);
+  const handleClearChat = () => setClearChatFlag(true);
 
   return (
-    <div className="h-screen bg-chat-bg text-white flex flex-col">
+    <div className="h-screen bg-chat-bg text-white flex flex-col overflow-hidden">
       {/* Header */}
-      <header className="border-b border-chat-border px-4 py-3">
+      <header className="flex-shrink-0 border-b border-chat-border px-2 sm:px-4 py-2 sm:py-3">
         <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <div className="bg-blue-600 rounded-lg p-2">
-              <i className="fas fa-stethoscope text-white"></i>
+          <div className="flex items-center space-x-2 sm:space-x-3 min-w-0">
+            <div className="bg-blue-600 rounded-lg p-1.5 sm:p-2 flex-shrink-0">
+              <i className="fas fa-stethoscope text-white text-sm"></i>
             </div>
-            <div>
-              <h1 className="text-xl font-semibold">Hospital AI Assistant</h1>
-              <p className="text-gray-400 text-sm">Your medical consultation companion</p>
+            <div className="min-w-0">
+              <h1 className="text-lg sm:text-xl font-semibold truncate">Hospital AI Assistant</h1>
+              <p className="text-gray-400 text-xs sm:text-sm truncate">Your medical consultation companion</p>
             </div>
           </div>
           
-          {/* Google Calendar Connect Button */}
-          <GoogleCalendarConnect onConnectionChange={setIsCalendarConnected} />
+          {/* Action Buttons */}
+          <div className="flex items-center space-x-1 sm:space-x-2 flex-shrink-0">
+            <ProgressToggle />
+            <GoogleCalendarConnect onConnectionChange={setIsCalendarConnected} />
+          </div>
         </div>
       </header>
 
-      {/* Main Chat Area */}
-      <main className="flex-1 overflow-hidden">
-        <ChatContainer isCalendarConnected={isCalendarConnected} />
+      {/* Main Content Area with Sidebar */}
+      <main className="flex-1 overflow-hidden flex min-h-0">
+        {/* Progress Sidebar */}
+        <ProgressSidebar 
+          steps={progressState.steps}
+          currentStep={progressState.currentStep}
+          isVisible={progressState.isVisible}
+          onClearChat={handleClearChat}
+        />
+        
+        {/* Chat Container */}
+        <div className="flex-1 min-w-0 overflow-hidden">
+          <ChatContainer 
+            isCalendarConnected={isCalendarConnected} 
+            clearChatFlag={clearChatFlag} 
+            onClearChatHandled={() => setClearChatFlag(false)} 
+          />
+        </div>
       </main>
+      
+      {/* Mobile Progress Bar */}
+      <MobileProgressBar 
+        steps={progressState.steps}
+        currentStep={progressState.currentStep}
+        isVisible={progressState.isVisible}
+      />
     </div>
+  );
+}
+
+function App() {
+  return (
+    <ProgressProvider>
+      <AppContent />
+    </ProgressProvider>
   );
 }
 
