@@ -35,14 +35,14 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, disable
 
   return (
     <form onSubmit={handleSubmit} className="relative">
-      <div className="relative bg-chat-input rounded-2xl border border-chat-border shadow-lg">
+      <div className="relative bg-gray-800 rounded-2xl border border-gray-600 shadow-lg ring-1 ring-gray-600/20">
         <textarea
           ref={textareaRef}
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="Describe your symptoms..."
-          className="w-full px-4 py-3 pr-12 bg-transparent text-white placeholder-gray-400 border-none outline-none resize-none rounded-2xl min-h-[50px] max-h-[200px] overflow-y-auto"
+          className="w-full px-3 py-2 pr-10 bg-transparent text-white placeholder-gray-400 border-none outline-none resize-none rounded-2xl min-h-[40px] max-h-[120px] overflow-y-auto focus:ring-2 focus:ring-blue-500/50 transition-all text-sm"
           rows={1}
           disabled={disabled || isLoading}
         />
@@ -51,22 +51,22 @@ const ChatInput: React.FC<ChatInputProps> = ({ onSendMessage, isLoading, disable
         <button
           type="submit"
           disabled={disabled || !message.trim() || isLoading}
-          className={`absolute right-3 bottom-3 w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-200 ${
+          className={`absolute right-2 bottom-2 w-7 h-7 rounded-lg flex items-center justify-center transition-all duration-200 ${
             message.trim() && !isLoading
-              ? 'bg-blue-600 hover:bg-blue-700 text-white cursor-pointer'
+              ? 'bg-blue-600 hover:bg-blue-700 text-white cursor-pointer shadow-md'
               : 'bg-gray-600 text-gray-400 cursor-not-allowed'
           }`}
         >
           {isLoading ? (
-            <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"></div>
+            <div className="w-3 h-3 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"></div>
           ) : (
-            <i className="fas fa-paper-plane text-sm"></i>
+            <i className="fas fa-paper-plane text-xs"></i>
           )}
         </button>
       </div>
       
       {/* Helper Text */}
-      <div className="mt-2 text-xs text-gray-400 text-center">
+      <div className="mt-1 text-xs text-gray-500 text-center">
         Press Enter to send, Shift + Enter for new line
       </div>
     </form>

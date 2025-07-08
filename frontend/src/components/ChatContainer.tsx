@@ -1,19 +1,20 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Message, Doctor, AppointmentData, RouterResponse, TestRecommendation, SmartWelcomeResponse, PatientProfile, DiagnosticQuestion } from '../types';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { Message, Doctor, AppointmentData, RouterResponse, TestRecommendation, DiagnosticQuestion, SmartWelcomeResponse, PatientProfile } from '../types';
 import MessageBubble from './MessageBubble';
 import ChatInput from './ChatInput';
 import WelcomeScreen from './WelcomeScreen';
-import PhoneInputForm from './PhoneInputForm';
 import { SessionStorageManager } from '../utils/sessionStorage';
+import { useProgress } from '../contexts/ProgressContext';
 
 interface ChatContainerProps {
   isCalendarConnected?: boolean;
+  clearChatFlag?: boolean;
+  onClearChatHandled?: () => void;
 }
 
-const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = false }) => {
+const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = false, clearChatFlag, onClearChatHandled }) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [sessionId] = useState(() => SessionStorageManager.getSessionId());
   const [diagnosticState, setDiagnosticState] = useState<{
     sessionId: string | null;
     isDiagnosing: boolean;
@@ -22,16 +23,24 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
     currentQuestion: DiagnosticQuestion | null;
   }>({ sessionId: null, isDiagnosing: false, symptoms: '', currentQuestionId: null, currentQuestion: null });
 
-  const [phoneRecognitionState, setPhoneRecognitionState] = useState({
+  const [phoneRecognitionState, setPhoneRecognitionState] = useState<{
+    isCollectingPhone: boolean;
+    currentSymptoms: string;
+    conversationHistory: string;
+    pendingDoctors: Doctor[];
+    patientProfile: PatientProfile | null;
+    smartWelcomeData: SmartWelcomeResponse | null;
+  }>({
     isCollectingPhone: false, 
     currentSymptoms: '', 
     conversationHistory: '',
-    pendingDoctors: [] as Doctor[],
-    patientProfile: null as PatientProfile | null,
-    smartWelcomeData: null as SmartWelcomeResponse | null
+    pendingDoctors: [],
+    patientProfile: null,
+    smartWelcomeData: null
   });
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const { setCurrentStep, updateStep, resetProgress } = useProgress();
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -41,35 +50,15 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
     scrollToBottom();
   }, [messages]);
 
-  // Load conversation history on component mount
+  // Initialize progress when component mounts
   useEffect(() => {
-    const loadConversationHistory = () => {
-      try {
-        const recentMessages = SessionStorageManager.getConversationHistory();
-          if (recentMessages.length > 0) {
-            // Convert to Message format and add to state
-          const formattedMessages = recentMessages.map((entry: any) => ({
-            id: entry.id || Date.now() + Math.random(),
-            content: entry.content || '',
-              role: entry.role as 'user' | 'assistant',
-              timestamp: new Date(entry.timestamp),
-            type: 'text' as const
-          }));
-            
-            setMessages(formattedMessages);
-          }
-      } catch (error) {
-        console.error('Error loading conversation history:', error);
-      }
-    };
-    
-    loadConversationHistory();
-  }, []);
+    setCurrentStep('symptoms');
+  }, [setCurrentStep]);
 
-  const addMessage = (message: Omit<Message, 'id' | 'timestamp'>) => {
+  const addMessage = useCallback((message: Omit<Message, 'id' | 'timestamp'>) => {
     const newMessage = {
       ...message,
-      id: Date.now().toString(),
+      id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       timestamp: new Date(),
     } as Message;
     setMessages(prev => [...prev, newMessage]);
@@ -87,9 +76,9 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
         tests: newMessage.tests 
       }
     });
-  };
+  }, []);
 
-  const clearChat = () => {
+  const clearChat = useCallback(() => {
     setMessages([]);
     setDiagnosticState({
       sessionId: null,
@@ -99,7 +88,60 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
       currentQuestion: null
     });
     SessionStorageManager.clearConversationHistory();
-  };
+    // Reset progress when chat is cleared
+    resetProgress();
+    setCurrentStep('symptoms');
+  }, [resetProgress, setCurrentStep]);
+
+  // Clear chat flag handler - must be after clearChat is defined
+  useEffect(() => {
+    if (clearChatFlag) {
+      clearChat();
+      onClearChatHandled?.();
+    }
+  }, [clearChatFlag, onClearChatHandled, clearChat]);
+
+  // Load conversation history on component mount
+  useEffect(() => {
+    const loadConversationHistory = () => {
+      try {
+        const recentMessages = SessionStorageManager.getConversationHistory();
+        if (recentMessages.length > 0) {
+          // Convert to Message format and add to state
+          const formattedMessages = recentMessages.map((entry: any) => ({
+            id: entry.id || Date.now() + Math.random(),
+            content: entry.content || '',
+            role: entry.role as 'user' | 'assistant',
+            timestamp: new Date(entry.timestamp),
+            type: entry.type || 'text',
+            ...entry.metadata
+          }));
+          setMessages(formattedMessages);
+        } else {
+          // No messages in storage, add initial assistant message and persist it
+          const initialMessage = {
+            id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            content: "Let's start with some questions to better understand your symptoms.",
+            role: 'assistant' as const,
+            type: 'text' as const,
+            timestamp: new Date(),
+          };
+          setMessages([initialMessage]);
+          SessionStorageManager.addConversationEntry({
+            role: initialMessage.role,
+            content: initialMessage.content,
+            type: initialMessage.type,
+            metadata: {}
+          });
+        }
+      } catch (error) {
+        console.error('Error loading conversation history:', error);
+      }
+    };
+    loadConversationHistory();
+  }, []); // Remove addMessage dependency to prevent infinite loop
+
+
 
   const handleSendMessage = async (content: string, quickReply = false) => {
     if (!quickReply) {
@@ -110,6 +152,10 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
 
     // Check if user wants to book tests after diagnosis
     if (content.toLowerCase().includes('book medical tests') || content.toLowerCase().includes('i want to book medical tests')) {
+      // Update progress to booking step
+      setCurrentStep('booking');
+      updateStep('diagnosis', 'completed');
+      
     try {
         // Get test recommendations using LLM
         const response = await fetch(`http://localhost:8000/tests/recommendations/${encodeURIComponent(diagnosticState.symptoms)}`, {
@@ -137,6 +183,10 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
 
     // Check if user wants to book appointment after diagnosis  
     if (content.toLowerCase().includes('book an appointment') || content.toLowerCase().includes('i want to book an appointment')) {
+      // Update progress to booking step
+      setCurrentStep('booking');
+      updateStep('diagnosis', 'completed');
+      
       try {
         // Get doctor recommendations using LLM
       const response = await fetch('http://localhost:8000/recommend-doctors', {
@@ -165,6 +215,11 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
     }
 
     if (diagnosticState.isDiagnosing && diagnosticState.sessionId && diagnosticState.currentQuestionId !== null) {
+      // Update progress to show we're in the diagnosis phase
+      setCurrentStep('diagnosis');
+      updateStep('symptoms', 'completed');
+      updateStep('questions', 'active');
+      
       // Handle answer to a diagnostic question
       const urlParams = new URLSearchParams({
         session_id: diagnosticState.sessionId,
@@ -196,6 +251,12 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
           currentQuestion: result.current_question || null
         }));
       } else if (result.next_step === 'provide_diagnosis' || result.next_step === 'review_diagnosis' || result.next_step === 'emergency_referral') {
+        // Update progress to show diagnosis is complete
+        updateStep('questions', 'completed');
+        updateStep('analysis', 'completed');
+        updateStep('prediction', 'completed');
+        updateStep('diagnosis', 'completed');
+        
         addMessage({ content: result.message, role: 'assistant', type: 'diagnostic_result', diagnosticResult: result });
         
         // Note: Consequence message is now included within the diagnostic_result type in MessageBubble
@@ -224,9 +285,13 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
           type: 'text'
         });
       } else {
+        // Update progress to show symptoms are being processed
+        updateStep('symptoms', 'active');
+        
         // Start diagnostic session with critical questions for proper symptoms
         try {
-          const response = await fetch(`http://localhost:8000/v2/start-adaptive-diagnostic?symptoms=${encodeURIComponent(content)}&session_id=${Date.now()}`, {
+          const newSessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+          const response = await fetch(`http://localhost:8000/v2/start-adaptive-diagnostic?symptoms=${encodeURIComponent(content)}&session_id=${newSessionId}`, {
             method: 'POST',
           });
           const result: RouterResponse = await response.json();
@@ -239,6 +304,10 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
             currentQuestion: result.current_question || null
           });
           
+          // Update progress to show symptoms are complete and diagnosis is starting
+          updateStep('symptoms', 'completed');
+          setCurrentStep('diagnosis');
+          
           if (result.message) {
             addMessage({ content: result.message, role: 'assistant', type: 'text' });
           }
@@ -247,6 +316,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
           }
         } catch (error) {
           console.error('Error starting diagnostic session:', error);
+          updateStep('symptoms', 'error');
           addMessage({
             content: "I'm sorry, there was an error starting the diagnostic session. Please try again.",
             role: 'assistant',
@@ -277,37 +347,15 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
   };
 
   const handleDoctorSelect = (doctor: Doctor) => {
-    // Get conversation history for phone recognition
-    const conversationHistory = messages
-      .filter(m => m.role === 'user')
-      .map(m => m.content)
-      .join(' ');
-
-    // Check if we already have patient profile from phone recognition
-    if (phoneRecognitionState.patientProfile) {
-      // Skip phone collection, go directly to appointment form
+    // Always show the appointment form, phone recognition will happen during form submission
       addMessage({
         content: `You've selected Dr. ${doctor.name}. Please provide the details to book your appointment.`,
         role: 'assistant',
         type: 'appointment-form',
         selectedDoctor: doctor,
-      });
-    } else {
-      // Start phone recognition flow
-      setPhoneRecognitionState(prev => ({
-        ...prev,
-        isCollectingPhone: true,
-        currentSymptoms: diagnosticState.symptoms || 'general consultation',
-        conversationHistory,
-        pendingDoctors: [doctor]
-      }));
-
-      addMessage({
-        content: `Great choice! Dr. ${doctor.name} is an excellent doctor for your condition. To proceed with booking, I'll need to collect some information first.`,
-        role: 'assistant',
-        type: 'text'
-      });
-    }
+      patientProfile: phoneRecognitionState.patientProfile || undefined,
+      symptoms: phoneRecognitionState.currentSymptoms || diagnosticState.symptoms,
+    });
   };
 
   const handleAppointmentSubmit = async (appointmentData: AppointmentData) => {
@@ -324,12 +372,20 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
       };
     }
     
+    try {
     const response = await fetch('http://localhost:8000/book-appointment', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(enhancedAppointmentData),
     });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || `HTTP ${response.status}: Failed to book appointment`);
+      }
+
     const result = await response.json();
+      console.log('Appointment booking result:', result); // Debug log
     setMessages(prev => prev.filter(m => m.type !== 'appointment-form'));
     
     // Generate personalized success message
@@ -341,13 +397,39 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
       }
     }
     
+    // Update progress to show booking is complete and confirmation is active
+    updateStep('booking', 'completed');
+    setCurrentStep('confirmation');
+    updateStep('confirmation', 'active');
+    
     addMessage({
       content: successMessage,
       role: 'assistant',
       type: 'appointment-success',
-      appointment: { ...enhancedAppointmentData, id: result.id, doctor_name: result.doctor_name, status: 'confirmed' }
+      appointment: { 
+        ...enhancedAppointmentData, 
+        id: result.id || result.appointment_id || Date.now(), // Fallback ID generation
+        doctor_name: result.doctor_name || result.doctor?.name || 'Unknown Doctor', 
+        status: result.status || 'confirmed' 
+      }
     });
+    
+      // Mark confirmation as completed after a short delay
+      setTimeout(() => {
+        updateStep('confirmation', 'completed');
+      }, 2000);
+      
+    } catch (error) {
+      console.error('Error booking appointment:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      addMessage({
+        content: `❌ Error booking appointment: ${errorMessage}`,
+        role: 'assistant',
+        type: 'text'
+      });
+    } finally {
     setIsLoading(false);
+    }
   };
 
   // Helper function for ordinal numbers
@@ -361,6 +443,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
   };
   
   const handleTestsSelect = (tests: TestRecommendation[]) => {
+    // Always show the test form, phone recognition will happen during form submission
       addMessage({
         content: `You've selected ${tests.length} test${tests.length !== 1 ? 's' : ''}. Please provide the details to book your tests.`,
         role: 'assistant',
@@ -390,6 +473,11 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
       // Remove the test form message
       setMessages(prev => prev.filter(m => m.type !== 'test_form'));
       
+      // Update progress to show booking is complete and confirmation is active
+      updateStep('booking', 'completed');
+      setCurrentStep('confirmation');
+      updateStep('confirmation', 'active');
+      
       // Add success message with booking details (like appointment-success)
       addMessage({
         content: result.message || '✅ Tests booked successfully!',
@@ -406,6 +494,11 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
           preparation_instructions: result.preparation_instructions
         }
       });
+      
+      // Mark confirmation as completed after a short delay
+      setTimeout(() => {
+        updateStep('confirmation', 'completed');
+      }, 2000);
     } catch (error) {
       console.error('Error booking tests:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
@@ -444,6 +537,16 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
   };
 
   const handleRescheduleSubmit = async (appointmentId: number, newDate: string, newTime: string) => {
+    // Validate appointment ID
+    if (!appointmentId || appointmentId === 0) {
+      addMessage({
+        content: '❌ Cannot reschedule appointment: Invalid appointment ID',
+        role: 'assistant',
+        type: 'text'
+      });
+      return;
+    }
+    
     setIsLoading(true);
     try {
       const response = await fetch('http://localhost:8000/reschedule-appointment', {
@@ -513,6 +616,16 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
   const handleCancelAppointment = async (appointmentId: number) => {
     if (isLoading) return; // Prevent multiple simultaneous requests
     
+    // Validate appointment ID
+    if (!appointmentId || appointmentId === 0) {
+      addMessage({
+        content: '❌ Cannot cancel appointment: Invalid appointment ID',
+        role: 'assistant',
+        type: 'text'
+      });
+      return;
+    }
+    
     setIsLoading(true);
     try {
       const response = await fetch(`http://localhost:8000/cancel-appointment/${appointmentId}`, {
@@ -545,11 +658,9 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
   };
 
   const handleCancelTest = async (bookingId: string) => {
-    if (isLoading) return; // Prevent multiple simultaneous requests
-    
     setIsLoading(true);
     try {
-      const response = await fetch(`http://localhost:8000/tests/cancel/${bookingId}`, {
+      const response = await fetch(`http://localhost:8000/cancel-test/${bookingId}`, {
         method: 'DELETE',
       });
       
@@ -560,16 +671,19 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
       
       const result = await response.json();
       
+      // Remove the test success message from chat
+      setMessages(prev => prev.filter(m => !(m.type === 'test-success' && m.testBooking?.booking_id === bookingId)));
+      
       addMessage({
-        content: result.message || '✅ Test booking cancelled successfully.',
+        content: result.message || '✅ Test booking cancelled successfully',
         role: 'assistant',
         type: 'text'
       });
     } catch (error) {
-      console.error('Error cancelling test booking:', error);
+      console.error('Error cancelling test:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
       addMessage({
-        content: `❌ Error cancelling test booking: ${errorMessage}`,
+        content: `❌ Error cancelling test: ${errorMessage}`,
         role: 'assistant',
         type: 'text'
       });
@@ -578,7 +692,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
     }
   };
 
-  // Phase 2: Phone recognition handlers
+  // Phone recognition handlers
   const handlePatientRecognized = (smartWelcomeResponse: SmartWelcomeResponse) => {
     const { patient_profile, welcome_message } = smartWelcomeResponse;
     
@@ -595,119 +709,57 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
       role: 'assistant',
       type: 'text'
     });
-
-    // Continue with appointment booking flow
-    if (phoneRecognitionState.pendingDoctors.length > 0) {
-      const selectedDoctor = phoneRecognitionState.pendingDoctors[0];
-      addMessage({
-        content: `Perfect! Now let's book your appointment with Dr. ${selectedDoctor.name}. Please provide the appointment details.`,
-        role: 'assistant',
-        type: 'appointment-form',
-        selectedDoctor: selectedDoctor,
-        patientProfile: patient_profile,
-        symptoms: phoneRecognitionState.currentSymptoms,
-      });
-    }
-  };
-
-  const handlePhoneRecognitionCancel = () => {
-    setPhoneRecognitionState(prev => ({
-      ...prev,
-      isCollectingPhone: false,
-      currentSymptoms: '',
-      conversationHistory: '',
-      pendingDoctors: []
-    }));
-
-    addMessage({
-      content: "No problem! You can continue browsing our services. If you'd like to book an appointment later, just let me know.",
-      role: 'assistant',
-      type: 'text'
-    });
   };
 
   return (
-    <div className="flex flex-col h-full bg-chat-bg text-white">
+    <div className="h-full flex flex-col bg-chat-bg">
       {messages.length <= 1 ? (
-        <div className="flex flex-col h-full">
+        <div className="flex flex-col h-full px-2 sm:px-4 lg:px-8 py-4 lg:py-8">
           <div className="flex-1 flex flex-col justify-center">
             <WelcomeScreen onExampleClick={handleSendMessage} />
-            <div className="px-4 md:px-6 pb-8">
-              <div className="max-w-3xl mx-auto">
-                <ChatInput onSendMessage={handleSendMessage} isLoading={isLoading} disabled={isLoading} />
-              </div>
+          </div>
+          {/* Fixed input at bottom for welcome screen */}
+          <div className="flex-shrink-0 px-2 sm:px-4 lg:px-6 pb-3 lg:pb-4">
+            <div className="max-w-2xl mx-auto">
+              <ChatInput onSendMessage={handleSendMessage} isLoading={isLoading} disabled={isLoading} />
             </div>
           </div>
         </div>
       ) : (
         <>
-          <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
-            {messages.map((msg) => (
-              <MessageBubble 
-                key={msg.id}
-                message={msg}
-                onQuickReply={handleSendMessage}
-                onBookAppointment={handleBookAppointment}
-                onBookTests={handleBookTests}
-                onDoctorSelect={handleDoctorSelect}
-                onAppointmentSubmit={handleAppointmentSubmit}
-                onTestsSelect={handleTestsSelect}
-                onTestSubmit={handleTestSubmit}
-                onRescheduleAppointment={handleRescheduleAppointment}
-                onRescheduleSubmit={handleRescheduleSubmit}
-                onRescheduleCancel={handleRescheduleCancel}
-                onCancelAppointment={handleCancelAppointment}
-                onCancelTest={handleCancelTest}
-                isLoading={isLoading}
-              />
-            ))}
-            
-            {/* Phase 2: Phone Recognition Form */}
-            {phoneRecognitionState.isCollectingPhone && (
-              <div className="flex justify-start">
-                <div className="w-8 h-8 rounded-full flex-shrink-0 bg-green-600 flex items-center justify-center">
-                  <i className="fas fa-robot text-white text-sm"></i>
-                </div>
-                <div className="ml-3 max-w-lg">
-                  <PhoneInputForm
-                    onPatientRecognized={handlePatientRecognized}
-                    onCancel={handlePhoneRecognitionCancel}
-                    symptoms={phoneRecognitionState.currentSymptoms}
-                    sessionId={sessionId}
-                    conversationHistory={phoneRecognitionState.conversationHistory}
-                  />
-                </div>
-              </div>
-            )}
-            
-            {isLoading && (
-              <div className="flex justify-start">
-                  <div className="w-8 h-8 rounded-full flex-shrink-0 bg-green-600 flex items-center justify-center">
-                    <i className="fas fa-robot text-white text-sm"></i>
-                  </div>
-                  <div className="ml-3 bg-chat-assistant rounded-2xl px-4 py-3 text-sm text-gray-300">
-                      Typing...
-                </div>
-              </div>
-            )}
+          {/* Scrollable messages area with fixed height calculation */}
+          <div className="flex-1 overflow-y-auto overflow-x-hidden px-2 sm:px-4 lg:px-6 pt-3 lg:pt-4 pb-2 min-h-0">
+            <div className="pb-4"> {/* Extra padding to ensure last message is visible and input never overlaps */}
+              {messages.map((message, idx) => (
+                <MessageBubble 
+                  key={message.id}
+                  message={message}
+                  onDoctorSelect={handleDoctorSelect}
+                  onAppointmentSubmit={handleAppointmentSubmit}
+                  onTestsSelect={handleTestsSelect}
+                  onTestSubmit={handleTestSubmit}
+                  onQuickReply={handleSendMessage}
+                  onBookAppointment={handleBookAppointment}
+                  onBookTests={handleBookTests}
+                  onRescheduleAppointment={handleRescheduleAppointment}
+                  onRescheduleSubmit={handleRescheduleSubmit}
+                  onRescheduleCancel={handleRescheduleCancel}
+                  onCancelAppointment={handleCancelAppointment}
+                  onCancelTest={handleCancelTest}
+                  onPatientRecognized={handlePatientRecognized}
+                  isLoading={isLoading}
+                />
+              ))}
+            </div>
             <div ref={messagesEndRef} />
           </div>
-          <div className="p-4 md:p-6 border-t border-chat-border">
-            <div className="flex items-center gap-3 mb-3">
-              <button
-                onClick={clearChat}
-                className="text-xs text-gray-400 hover:text-white transition-colors duration-200 flex items-center gap-1"
-                disabled={isLoading}
-              >
-                <i className="fas fa-trash text-xs"></i>
-                Clear Chat
-              </button>
-              <div className="text-xs text-gray-500">
-                {messages.length} messages
-              </div>
+          
+          {/* Fixed input area at bottom - ALWAYS stays at bottom regardless of content */}
+          <div className="flex-shrink-0 border-t border-gray-600/30 bg-gradient-to-t from-chat-bg via-chat-bg to-transparent px-2 sm:px-4 lg:px-8 py-2 lg:py-3 backdrop-blur-sm">
+            <div className="max-w-2xl mx-auto">
+              <ChatInput onSendMessage={handleSendMessage} isLoading={isLoading} disabled={isLoading} />
             </div>
-            <ChatInput onSendMessage={handleSendMessage} isLoading={isLoading} disabled={isLoading} />
-      </div>
+          </div>
         </>
       )}
     </div>
