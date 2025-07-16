@@ -24,6 +24,7 @@ class Subdivision(Base):
 class Doctor(Base):
     __tablename__ = 'doctors'
     id = Column(Integer, primary_key=True, index=True)
+    hospital_id = Column(Integer, ForeignKey('hospitals.id'), nullable=True)  # Will be set via migration
     name = Column(String(100), nullable=False)
     department_id = Column(Integer, ForeignKey('departments.id'))
     subdivision_id = Column(Integer, ForeignKey('subdivisions.id'))
@@ -35,6 +36,7 @@ class Doctor(Base):
     phone_number = Column(String(20), nullable=True)
     department = relationship('Department', back_populates='doctors')
     subdivision = relationship('Subdivision', back_populates='doctors')
+    hospital = relationship('Hospital', back_populates='doctors')
     availabilities = relationship('DoctorAvailability', back_populates='doctor')
     appointments = relationship('Appointment', back_populates='doctor')
     medications = relationship('Medication', back_populates='prescribing_doctor')
@@ -65,6 +67,7 @@ class User(Base):
 class Patient(Base):
     __tablename__ = 'patients'
     id = Column(Integer, primary_key=True, index=True)
+    hospital_id = Column(Integer, ForeignKey('hospitals.id'), nullable=True)  # Will be set via migration
     first_name = Column(String(100), nullable=False)
     last_name = Column(String(100), nullable=False)
     date_of_birth = Column(Date, nullable=False)
@@ -81,6 +84,7 @@ class Patient(Base):
     updated_at = Column(DateTime, server_default=func.current_timestamp(), onupdate=func.current_timestamp())
     
     # Relationships
+    hospital = relationship('Hospital', back_populates='patients')
     medical_history = relationship('MedicalHistory', back_populates='patient')
     medications = relationship('Medication', back_populates='patient')
     allergies = relationship('Allergy', back_populates='patient')
@@ -95,6 +99,7 @@ class Patient(Base):
 class Appointment(Base):
     __tablename__ = 'appointments'
     id = Column(Integer, primary_key=True, index=True)
+    hospital_id = Column(Integer, ForeignKey('hospitals.id'), nullable=True)  # Will be set via migration
     user_id = Column(Integer, ForeignKey('users.id'), nullable=True)
     doctor_id = Column(Integer, ForeignKey('doctors.id'))
     date = Column(Date, nullable=False)
@@ -105,6 +110,7 @@ class Appointment(Base):
     phone_number = Column(String(20))
     user = relationship('User', back_populates='appointments')
     doctor = relationship('Doctor', back_populates='appointments')
+    hospital = relationship('Hospital', back_populates='appointments')
 
 # Medical History Tables (matching existing schema)
 class MedicalHistory(Base):
@@ -406,4 +412,133 @@ class VisitHistory(Base):
     session_data = Column(Text)  # Complete session context for reference
     
     # Relationships
-    patient_profile = relationship('PatientProfile', back_populates='visit_history') 
+    patient_profile = relationship('PatientProfile', back_populates='visit_history')
+
+# ============================================================================
+# MULTI-TENANT ADMIN SYSTEM MODELS
+# ============================================================================
+
+class Hospital(Base):
+    """Hospital/Organization model for multi-tenancy"""
+    __tablename__ = 'hospitals'
+    
+    id = Column(Integer, primary_key=True, index=True)
+    hospital_id = Column(String(50), unique=True, nullable=False, index=True)  # Unique identifier like 'apollo_delhi'
+    name = Column(String(200), nullable=False)
+    display_name = Column(String(200), nullable=False)
+    address = Column(Text)
+    phone = Column(String(20))
+    email = Column(String(100))
+    website = Column(String(200))
+    subscription_plan = Column(String(50), default='basic')  # basic, premium, enterprise
+    subscription_status = Column(String(20), default='active')  # active, suspended, cancelled
+    subscription_expires = Column(DateTime)
+    max_doctors = Column(Integer, default=10)
+    max_patients = Column(Integer, default=1000)
+    features_enabled = Column(Text, default='[]')  # JSON array of enabled features
+    google_workspace_domain = Column(String(100))  # For Google Calendar integration
+    created_at = Column(DateTime, server_default=func.current_timestamp())
+    updated_at = Column(DateTime, server_default=func.current_timestamp(), onupdate=func.current_timestamp())
+    
+    # Relationships
+    admin_users = relationship('AdminUser', back_populates='hospital')
+    doctors = relationship('Doctor', back_populates='hospital')
+    patients = relationship('Patient', back_populates='hospital')
+    appointments = relationship('Appointment', back_populates='hospital')
+
+class AdminUser(Base):
+    """Admin user accounts for hospital management"""
+    __tablename__ = 'admin_users'
+    
+    id = Column(Integer, primary_key=True, index=True)
+    hospital_id = Column(Integer, ForeignKey('hospitals.id'), nullable=False)
+    username = Column(String(100), unique=True, nullable=False, index=True)
+    email = Column(String(100), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)
+    first_name = Column(String(100), nullable=False)
+    last_name = Column(String(100), nullable=False)
+    phone = Column(String(20))
+    is_active = Column(Boolean, default=True)
+    is_super_admin = Column(Boolean, default=False)  # Can manage multiple hospitals
+    last_login = Column(DateTime)
+    login_attempts = Column(Integer, default=0)
+    locked_until = Column(DateTime)  # For account lockout
+    two_factor_enabled = Column(Boolean, default=False)
+    two_factor_secret = Column(String(100))  # For TOTP
+    backup_codes = Column(Text)  # JSON array of backup codes
+    created_at = Column(DateTime, server_default=func.current_timestamp())
+    updated_at = Column(DateTime, server_default=func.current_timestamp(), onupdate=func.current_timestamp())
+    
+    # Relationships
+    hospital = relationship('Hospital', back_populates='admin_users')
+    user_roles = relationship('UserRole', back_populates='admin_user', foreign_keys='UserRole.admin_user_id')
+    granted_roles = relationship('UserRole', foreign_keys='UserRole.granted_by')
+
+class Role(Base):
+    """Role definitions for role-based access control"""
+    __tablename__ = 'roles'
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100), unique=True, nullable=False)  # hospital_admin, department_head, etc.
+    display_name = Column(String(100), nullable=False)
+    description = Column(Text)
+    permissions = Column(Text, default='[]')  # JSON array of permission codes
+    is_system_role = Column(Boolean, default=False)  # Cannot be modified
+    created_at = Column(DateTime, server_default=func.current_timestamp())
+    
+    # Relationships
+    user_roles = relationship('UserRole', back_populates='role')
+
+class UserRole(Base):
+    """Many-to-many relationship between AdminUser and Role"""
+    __tablename__ = 'user_roles'
+    
+    id = Column(Integer, primary_key=True, index=True)
+    admin_user_id = Column(Integer, ForeignKey('admin_users.id'), nullable=False)
+    role_id = Column(Integer, ForeignKey('roles.id'), nullable=False)
+    granted_by = Column(Integer, ForeignKey('admin_users.id'))  # Who granted this role
+    granted_at = Column(DateTime, server_default=func.current_timestamp())
+    expires_at = Column(DateTime)  # Optional role expiration
+    
+    # Relationships
+    admin_user = relationship('AdminUser', back_populates='user_roles', foreign_keys=[admin_user_id])
+    role = relationship('Role', back_populates='user_roles')
+    granted_by_user = relationship('AdminUser', foreign_keys=[granted_by], overlaps="granted_roles")
+
+class Permission(Base):
+    """Permission definitions for fine-grained access control"""
+    __tablename__ = 'permissions'
+    
+    id = Column(Integer, primary_key=True, index=True)
+    code = Column(String(100), unique=True, nullable=False)  # doctor:create, patient:read, etc.
+    name = Column(String(100), nullable=False)
+    description = Column(Text)
+    resource_type = Column(String(50))  # doctor, patient, appointment, etc.
+    action = Column(String(50))  # create, read, update, delete, manage
+    created_at = Column(DateTime, server_default=func.current_timestamp())
+
+class AuditLog(Base):
+    """Audit trail for admin actions"""
+    __tablename__ = 'audit_logs'
+    
+    id = Column(Integer, primary_key=True, index=True)
+    hospital_id = Column(Integer, ForeignKey('hospitals.id'), nullable=False)
+    admin_user_id = Column(Integer, ForeignKey('admin_users.id'), nullable=False)
+    action = Column(String(100), nullable=False)  # user.login, doctor.create, etc.
+    resource_type = Column(String(50))  # user, doctor, patient, etc.
+    resource_id = Column(String(50))  # ID of the affected resource
+    details = Column(Text)  # JSON with action details
+    ip_address = Column(String(45))  # IPv4 or IPv6
+    user_agent = Column(Text)
+    created_at = Column(DateTime, server_default=func.current_timestamp())
+    
+    # Relationships
+    hospital = relationship('Hospital')
+    admin_user = relationship('AdminUser')
+
+# ============================================================================
+# ENHANCE EXISTING MODELS WITH HOSPITAL_ID
+# ============================================================================
+
+# Add hospital_id to existing models (these will be added via migration)
+# The relationships are defined here for reference 

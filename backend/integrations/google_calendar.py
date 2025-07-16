@@ -245,14 +245,14 @@ async def create_calendar_event(doctor: models.Doctor, appointment_data: dict, d
             
             existing_event = None
             for search_query in search_queries:
-            events_result = service.events().list(
-                calendarId='primary',
-                timeMin=f"{search_date}T00:00:00Z",
-                timeMax=f"{search_date}T23:59:59Z",
+                events_result = service.events().list(
+                    calendarId='primary',
+                    timeMin=f"{search_date}T00:00:00Z",
+                    timeMax=f"{search_date}T23:59:59Z",
                     q=search_query
-            ).execute()
-            
-            events = events_result.get('items', [])
+                ).execute()
+                
+                events = events_result.get('items', [])
                 if events:
                     # Find the most likely match
                     for event in events:

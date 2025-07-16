@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import ChatContainer from './components/ChatContainer';
 import GoogleCalendarConnect from './components/GoogleCalendarConnect';
 import ProgressSidebar from './components/ProgressSidebar';
 import ProgressToggle from './components/ProgressToggle';
 import MobileProgressBar from './components/MobileProgressBar';
+import AdminApp from './components/AdminApp';
 import { ProgressProvider, useProgress } from './contexts/ProgressContext';
 
 function AppContent() {
@@ -66,6 +67,23 @@ function AppContent() {
 }
 
 function App() {
+  const [currentPath, setCurrentPath] = useState(window.location.pathname);
+
+  useEffect(() => {
+    const handlePopState = () => {
+      setCurrentPath(window.location.pathname);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  // Simple routing logic
+  if (currentPath.startsWith('/admin')) {
+    return <AdminApp />;
+  }
+
+  // Default to patient chat interface
   return (
     <ProgressProvider>
       <AppContent />

@@ -33,6 +33,9 @@ from integrations import google_calendar_router
 # Import adaptive routes
 from routes.adaptive_routes import router as adaptive_router
 
+# Import admin routes
+from routes.admin_routes import router as admin_router
+
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -62,6 +65,9 @@ app.include_router(google_calendar_router, prefix="/auth", tags=["Google Calenda
 
 # Include adaptive routes (Phase 1 Month 2)
 app.include_router(adaptive_router)
+
+# Include admin routes
+app.include_router(admin_router)
 
 
 @app.get("/")
