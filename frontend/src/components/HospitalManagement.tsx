@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { useHospital } from '../contexts/HospitalContext';
+import { apiFetch } from '../utils/api';
 import { 
   Hospital, 
   Plus, 
@@ -62,28 +64,25 @@ const HospitalManagement: React.FC<HospitalManagementProps> = ({ currentUser }) 
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showDetailsModal, setShowDetailsModal] = useState(false);
 
+  const { hospital } = useHospital();
+
   useEffect(() => {
     fetchHospitals();
-  }, []);
+  }, [hospital]);
 
   const fetchHospitals = async () => {
     try {
       setLoading(true);
       const token = localStorage.getItem('admin_access_token');
-      
-      const response = await fetch('http://localhost:8000/admin/hospitals', {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to fetch hospitals');
+      // For superadmin, fetch all hospitals; for hospital admin, fetch only their hospital
+      let hospitalsData = [];
+      if (hospital?.slug) {
+        hospitalsData = await apiFetch('/admin/hospitals', {
+          slug: hospital.slug,
+        token: token || undefined
+        });
       }
-
-      const data = await response.json();
-      setHospitals(Array.isArray(data) ? data : data.hospitals || []);
+      setHospitals(Array.isArray(hospitalsData) ? hospitalsData : hospitalsData.hospitals || []);
     } catch (err: any) {
       setError(err.message || 'Failed to fetch hospitals');
     } finally {
@@ -94,19 +93,12 @@ const HospitalManagement: React.FC<HospitalManagementProps> = ({ currentUser }) 
   const handleCreateHospital = async (hospitalData: any) => {
     try {
       const token = localStorage.getItem('admin_access_token');
-      const response = await fetch('http://localhost:8000/admin/hospitals', {
+      await apiFetch('/admin/hospitals', {
+        slug: hospital?.slug || '',
+        token: token ?? undefined,
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(hospitalData),
+        body: hospitalData
       });
-
-      if (!response.ok) {
-        throw new Error('Failed to create hospital');
-      }
-
       await fetchHospitals();
       setShowCreateModal(false);
     } catch (err: any) {
@@ -117,19 +109,12 @@ const HospitalManagement: React.FC<HospitalManagementProps> = ({ currentUser }) 
   const handleUpdateHospital = async (hospitalId: number, hospitalData: any) => {
     try {
       const token = localStorage.getItem('admin_access_token');
-      const response = await fetch(`http://localhost:8000/admin/hospitals/${hospitalId}`, {
+      await apiFetch(`/admin/hospitals/${hospitalId}`, {
+        slug: hospital?.slug || '',
+        token: token ?? undefined,
         method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(hospitalData),
+        body: hospitalData
       });
-
-      if (!response.ok) {
-        throw new Error('Failed to update hospital');
-      }
-
       await fetchHospitals();
       setShowEditModal(false);
       setSelectedHospital(null);
@@ -141,18 +126,11 @@ const HospitalManagement: React.FC<HospitalManagementProps> = ({ currentUser }) 
   const handleDeleteHospital = async (hospitalId: number) => {
     try {
       const token = localStorage.getItem('admin_access_token');
-      const response = await fetch(`http://localhost:8000/admin/hospitals/${hospitalId}`, {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
+      await apiFetch(`/admin/hospitals/${hospitalId}`, {
+        slug: hospital?.slug || '',
+        token: token ?? undefined,
+        method: 'DELETE'
       });
-
-      if (!response.ok) {
-        throw new Error('Failed to delete hospital');
-      }
-
       await fetchHospitals();
       setShowDeleteModal(false);
       setSelectedHospital(null);

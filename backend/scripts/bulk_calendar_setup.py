@@ -11,7 +11,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy.orm import Session
-from core.database import get_db
+from backend.core.database import get_db
 from core import models
 
 def generate_calendar_urls():

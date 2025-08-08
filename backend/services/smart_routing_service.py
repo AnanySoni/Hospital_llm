@@ -1,8 +1,8 @@
 from typing import List, Dict, Optional, Tuple
 from sqlalchemy.orm import Session
-from core.models import Doctor, Department
-from schemas.triage_models import TriageLevel, TriageAssessment, TriageResponse
-from utils.llm_utils import call_groq_api
+from backend.core.models import Doctor, Department
+from backend.schemas.triage_models import TriageLevel, TriageAssessment, TriageResponse
+from backend.utils.llm_utils import call_groq_api
 import logging
 import json
 

@@ -24,6 +24,7 @@ interface MessageBubbleProps {
   onCancelTest?: (bookingId: string) => void;
   onPatientRecognized?: (smartWelcomeResponse: SmartWelcomeResponse) => void;
   isLoading?: boolean;
+  hospitalSlug?: string;
 }
 
 const MessageBubble: React.FC<MessageBubbleProps> = ({ 
@@ -42,6 +43,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   onCancelTest,
   onPatientRecognized,
   isLoading = false,
+  hospitalSlug = 'demo1',
 }) => {
   const isUser = message.role === 'user';
   const [selectedTests, setSelectedTests] = useState<Set<string>>(new Set());
@@ -68,6 +70,12 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
   };
 
   const renderContent = () => {
+    // Safety check for tests property
+    if (message.tests && !Array.isArray(message.tests)) {
+      console.error('message.tests is not an array:', message.tests);
+      message.tests = []; // Convert to empty array if not an array
+    }
+    
     switch (message.type) {
       case 'diagnostic_question':
         if (!message.question) return null;
@@ -222,6 +230,7 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({
             patientProfile={message.patientProfile}
             symptoms={message.symptoms}
                 onPatientRecognized={onPatientRecognized}
+                hospitalSlug={hospitalSlug}
           />
             </div>
           </div>

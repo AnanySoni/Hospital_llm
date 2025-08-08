@@ -8,7 +8,7 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import create_engine, MetaData, inspect
-from core.database import engine
+from backend.core.database import engine
 
 def inspect_existing_database():
     """Inspect the existing database and show all tables and columns"""

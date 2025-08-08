@@ -9,7 +9,7 @@ import logging
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 
-from schemas.triage_models import (
+from backend.schemas.triage_models import (
     TriageLevel, 
     TriageAssessment, 
     RiskFactor, 
@@ -17,13 +17,27 @@ from schemas.triage_models import (
     AGE_RISK_MULTIPLIERS,
     RED_FLAG_PATTERNS
 )
-from utils.llm_utils import call_groq_api, robust_json_parse
-from utils.confidence_utils import calculate_confidence_level
+from backend.utils.llm_utils import call_groq_api, robust_json_parse
+from backend.utils.confidence_utils import calculate_confidence_level
 
 logger = logging.getLogger(__name__)
 
 
 class TriageService:
+    def get_triage_records(self, patient_id=None, hospital_id=None, is_super_admin=False):
+        """Get triage records for a hospital, or all if superadmin"""
+        from backend.core.database import get_db
+        from backend.core.models import TriageRecord
+        db = next(get_db())
+        try:
+            query = db.query(TriageRecord)
+            if not is_super_admin and hospital_id is not None:
+                query = query.filter(TriageRecord.hospital_id == hospital_id)
+            if patient_id:
+                query = query.filter(TriageRecord.patient_id == patient_id)
+            return query.all()
+        finally:
+            db.close()
     """Medical triage service for urgency assessment and emergency detection"""
     
     def __init__(self):

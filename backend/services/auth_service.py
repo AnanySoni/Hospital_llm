@@ -13,8 +13,8 @@ from sqlalchemy.orm import Session
 from fastapi import HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
-from core.models import AdminUser, Hospital, Role, UserRole, Permission, AuditLog
-from schemas.admin_models import AdminUserCreate, AdminUserUpdate, LoginRequest, TokenResponse
+from backend.core.models import AdminUser, Hospital, Role, UserRole, Permission, AuditLog
+from backend.schemas.admin_models import AdminUserCreate, AdminUserUpdate, LoginRequest, TokenResponse
 
 # JWT Configuration
 SECRET_KEY = "your-secret-key-change-in-production"  # Change in production
@@ -43,6 +43,11 @@ class AuthService:
     def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
         """Create a JWT access token"""
         to_encode = data.copy()
+        # Always include hospital_id and is_super_admin in token
+        if 'hospital_id' not in to_encode:
+            to_encode['hospital_id'] = None
+        if 'is_super_admin' not in to_encode:
+            to_encode['is_super_admin'] = False
         if expires_delta:
             expire = datetime.utcnow() + expires_delta
         else:
@@ -69,7 +74,7 @@ class AuthService:
             return payload
         except jwt.ExpiredSignatureError:
             raise HTTPException(status_code=401, detail="Token has expired")
-        except jwt.JWTError:
+        except jwt.PyJWTError:
             raise HTTPException(status_code=401, detail="Invalid token")
     
     @staticmethod
@@ -100,20 +105,16 @@ class AuthService:
         ).first()
         
         if not user:
-            # Increment login attempts for security
             AuthService._increment_login_attempts(db, login_request.username)
             raise HTTPException(status_code=401, detail="Invalid credentials")
         
-        # Check if account is locked
         if user.locked_until and user.locked_until > datetime.utcnow():
             raise HTTPException(status_code=401, detail="Account is temporarily locked")
         
-        # Verify password
         if not AuthService.verify_password(login_request.password, user.password_hash):
             AuthService._increment_login_attempts(db, user.username)
             raise HTTPException(status_code=401, detail="Invalid credentials")
         
-        # Check 2FA if enabled
         if user.two_factor_enabled:
             if not login_request.two_factor_code:
                 raise HTTPException(status_code=401, detail="2FA code required")
@@ -121,15 +122,18 @@ class AuthService:
             if not AuthService._verify_2fa_code(user, login_request.two_factor_code):
                 raise HTTPException(status_code=401, detail="Invalid 2FA code")
         
-        # Reset login attempts on successful login
         user.login_attempts = 0
         user.last_login = datetime.utcnow()
         db.commit()
         
-        # Get user permissions
         permissions = AuthService._get_user_permissions(db, user)
         
-        # Create tokens
+        # Validate user belongs to correct hospital (if not superadmin)
+        if not user.is_super_admin:
+            requested_hospital_id = getattr(login_request, 'hospital_id', None)
+            if requested_hospital_id and user.hospital_id != requested_hospital_id:
+                raise HTTPException(status_code=403, detail="User does not belong to requested hospital")
+        
         token_data = {
             "user_id": user.id,
             "username": user.username,
@@ -141,7 +145,6 @@ class AuthService:
         access_token = AuthService.create_access_token(token_data)
         refresh_token = AuthService.create_refresh_token(token_data)
         
-        # Log the login
         AuthService._log_action(db, user, "user.login", "user", str(user.id), {
             "ip_address": ip_address,
             "user_agent": user_agent
@@ -412,8 +415,11 @@ class AuthService:
         """Log an admin action for audit trail"""
         import json
         
+        # For super admins without a hospital_id, use a default system-wide scope (hospital_id=1)
+        hospital_id = user.hospital_id if user.hospital_id is not None else 1
+        
         audit_log = AuditLog(
-            hospital_id=user.hospital_id,
+            hospital_id=hospital_id,
             admin_user_id=user.id,
             action=action,
             resource_type=resource_type,
@@ -425,29 +431,29 @@ class AuthService:
         db.commit()
 
 # Dependency functions
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(lambda: next(__import__('core.database', fromlist=['get_db']).get_db()))) -> AdminUser:
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(lambda: next(__import__('backend.core.database', fromlist=['get_db']).get_db()))) -> AdminUser:
     """Get the current authenticated user"""
     token = credentials.credentials
     payload = AuthService.verify_token(token)
-    
     user_id = payload.get("user_id")
     if user_id is None:
         raise HTTPException(status_code=401, detail="Invalid token")
-    
     user = db.query(AdminUser).filter_by(id=user_id).first()
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
-    
     if not user.is_active:
         raise HTTPException(status_code=401, detail="User account is inactive")
-    
+    # Validate hospital context unless superadmin
+    token_hospital_id = payload.get("hospital_id")
+    if not user.is_super_admin and token_hospital_id is not None and user.hospital_id != token_hospital_id:
+        raise HTTPException(status_code=403, detail="User does not belong to this hospital context")
     return user
 
 def require_permission(permission: str):
     """Decorator to require specific permission"""
-    def permission_checker(current_user: AdminUser = Depends(get_current_user), db: Session = Depends(lambda: next(__import__('core.database', fromlist=['get_db']).get_db()))):
+    def permission_checker(current_user: AdminUser = Depends(get_current_user), db: Session = Depends(lambda: next(__import__('backend.core.database', fromlist=['get_db']).get_db()))):
         permissions = AuthService._get_user_permissions(db, current_user)
         if permission not in permissions and not current_user.is_super_admin:
             raise HTTPException(status_code=403, detail=f"Permission required: {permission}")
         return current_user
-    return permission_checker 
+    return permission_checker

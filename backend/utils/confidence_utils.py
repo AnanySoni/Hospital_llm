@@ -7,6 +7,7 @@ import json
 import re
 from typing import Dict, List, Tuple, Optional, Any
 from .llm_utils import call_groq_api
+from backend.schemas.triage_models import AGE_RISK_MULTIPLIERS
 
 
 def calculate_confidence_level(score: float) -> str:
@@ -314,8 +315,6 @@ def calculate_age_risk_multiplier(age: int, symptom_category: str) -> float:
     Calculate age-based risk adjustment multiplier for triage decisions
     Returns multiplier (0.0-2.0) where 1.0 is baseline risk
     """
-    
-    from schemas.triage_models import AGE_RISK_MULTIPLIERS
     
     if symptom_category not in AGE_RISK_MULTIPLIERS:
         # Default age-based risk adjustment for unknown categories

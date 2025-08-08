@@ -13,11 +13,12 @@ from sqlalchemy.orm import Session
 from fastapi import HTTPException, UploadFile
 from datetime import datetime
 
-from core.models import Doctor, Department, AdminUser, Hospital
-from schemas.admin_models import (
+from backend.core.models import Doctor, Department, AdminUser, Hospital
+from backend.schemas.admin_models import (
     DoctorCreateRequest, DoctorUpdateRequest, DoctorResponse,
     BulkUploadResponse, BulkUploadResult, EmailInvitationResponse
 )
+from backend.services.email_service import EmailService
 
 class DoctorService:
     """Service class for doctor management operations"""
@@ -49,11 +50,13 @@ class DoctorService:
     
     @staticmethod
     def update_doctor(db: Session, doctor_id: int, doctor_data: DoctorUpdateRequest, updated_by: AdminUser) -> Doctor:
-        """Update an existing doctor"""
-        doctor = db.query(Doctor).filter_by(id=doctor_id).first()
+        """Update an existing doctor, enforcing hospital_id isolation"""
+        query = db.query(Doctor).filter_by(id=doctor_id)
+        if not updated_by.is_super_admin:
+            query = query.filter(Doctor.hospital_id == updated_by.hospital_id)
+        doctor = query.first()
         if not doctor:
-            raise HTTPException(status_code=404, detail="Doctor not found")
-        
+            raise HTTPException(status_code=404, detail="Doctor not found or access denied")
         # Update fields
         if doctor_data.name is not None:
             doctor.name = doctor_data.name
@@ -65,44 +68,48 @@ class DoctorService:
             doctor.profile = f"{doctor_data.specialization} with {doctor_data.experience_years or 0} years experience"
         if doctor_data.languages is not None:
             doctor.tags = doctor_data.languages
-        
         db.commit()
         db.refresh(doctor)
-        
         return doctor
-    
+
     @staticmethod
     def delete_doctor(db: Session, doctor_id: int, deleted_by: AdminUser) -> bool:
-        """Delete a doctor"""
-        doctor = db.query(Doctor).filter_by(id=doctor_id).first()
+        """Delete a doctor, enforcing hospital_id isolation"""
+        query = db.query(Doctor).filter_by(id=doctor_id)
+        if not deleted_by.is_super_admin:
+            query = query.filter(Doctor.hospital_id == deleted_by.hospital_id)
+        doctor = query.first()
         if not doctor:
-            raise HTTPException(status_code=404, detail="Doctor not found")
-        
+            raise HTTPException(status_code=404, detail="Doctor not found or access denied")
         db.delete(doctor)
         db.commit()
-        
         return True
-    
+
     @staticmethod
-    def get_doctor(db: Session, doctor_id: int) -> Doctor:
-        """Get a single doctor by ID"""
-        doctor = db.query(Doctor).filter_by(id=doctor_id).first()
+    def get_doctor(db: Session, doctor_id: int, current_user: AdminUser = None) -> Doctor:
+        """Get a single doctor by ID, enforcing hospital_id isolation if user provided"""
+        query = db.query(Doctor).filter_by(id=doctor_id)
+        if current_user and not current_user.is_super_admin:
+            query = query.filter(Doctor.hospital_id == current_user.hospital_id)
+        doctor = query.first()
         if not doctor:
-            raise HTTPException(status_code=404, detail="Doctor not found")
-        
+            raise HTTPException(status_code=404, detail="Doctor not found or access denied")
         return doctor
     
     @staticmethod
-    def get_doctors(db: Session, hospital_id: int, skip: int = 0, limit: int = 100, search: str = None) -> List[Doctor]:
-        """Get all doctors for a hospital"""
-        query = db.query(Doctor).filter_by(hospital_id=hospital_id)
-        
+    def get_doctors(db: Session, hospital_id: int = None, skip: int = 0, limit: int = 100, search: str = None, is_super_admin: bool = False) -> List[Doctor]:
+        """Get all doctors for a hospital, or all if superadmin"""
+        query = db.query(Doctor)
+        if not is_super_admin and hospital_id is not None:
+            query = query.filter(Doctor.hospital_id == hospital_id)
+        elif is_super_admin and hospital_id is not None:
+            query = query.filter(Doctor.hospital_id == hospital_id)
+        # If is_super_admin and hospital_id is None, return all
         if search:
             query = query.filter(
                 (Doctor.name.ilike(f"%{search}%")) |
                 (Doctor.email.ilike(f"%{search}%"))
             )
-        
         return query.offset(skip).limit(limit).all()
     
     @staticmethod
@@ -200,7 +207,6 @@ class DoctorService:
     @staticmethod
     def send_email_invitations(db: Session, doctor_ids: List[int], message: str = None, admin_user: AdminUser = None) -> EmailInvitationResponse:
         """Send email invitations to doctors"""
-        from services.email_service import EmailService
         
         sent = 0
         failed = 0
@@ -286,4 +292,4 @@ Dr. John Smith,john.smith@hospital.com,+1-555-0123,Cardiologist,Cardiology,10,MD
 Dr. Jane Doe,jane.doe@hospital.com,+1-555-0124,Neurologist,Neurology,8,MD PhD,200,"English,French"
 Dr. Mike Johnson,mike.johnson@hospital.com,+1-555-0125,Pediatrician,Pediatrics,5,MD FAAP,120,"English,German"
 """
-        return template 
+        return template

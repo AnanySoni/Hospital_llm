@@ -9,8 +9,9 @@ from sqlalchemy import event
 from typing import Optional
 import logging
 
-from core.database import get_db
-from services.auth_service import AuthService
+from backend.core.database import get_db
+from backend.services.auth_service import AuthService
+from backend.core.models import Hospital
 
 logger = logging.getLogger(__name__)
 
@@ -61,28 +62,97 @@ def extract_hospital_from_token(request: Request) -> Optional[int]:
         logger.warning(f"Failed to extract hospital from token: {str(e)}")
         return None
 
-def setup_tenant_context(request: Request, db: Session):
-    """Setup tenant context for the current request"""
+# Simple in-memory cache for slug→hospital_id
+slug_hospital_cache = {}
+
+# Utility: Extract slug from URL path (e.g., /h/demo1 or /h/demo1/...) → demo1
+def extract_slug_from_path(request: Request) -> Optional[str]:
+    path = request.url.path
+    # Look for /h/<slug> or /h/<slug>/...
+    import re
+    match = re.match(r"/h/([a-zA-Z0-9_-]+)", path)
+    if match:
+        return match.group(1)
+    return None
+
+# Utility: Look up hospital_id by slug, with cache
+def get_hospital_id_by_slug(slug: str, db: Session) -> Optional[int]:
+    if slug in slug_hospital_cache:
+        print(f"[DEBUG] Cache hit for slug '{slug}': {slug_hospital_cache[slug]}")
+        return slug_hospital_cache[slug]
+    print(f"[DEBUG] Querying Hospital for slug: {slug}")
+    hospital_query = db.query(Hospital).filter_by(slug=slug)
+    print(f"[DEBUG] Hospital query object: {hospital_query}, type: {type(hospital_query)}")
     try:
-        # Extract hospital_id from token
+        hospital = hospital_query.first()
+    except Exception as e:
+        print(f"[DEBUG] Exception when calling .first() on hospital_query: {e} (type: {type(e)})")
+        raise
+    print(f"[DEBUG] Hospital query result: {hospital}, type: {type(hospital)}")
+    if hospital is not None:
+        hospital_id = getattr(hospital, 'id', None)
+        print(f"[DEBUG] Found hospital_id: {hospital_id}")
+        if isinstance(hospital_id, int):
+            slug_hospital_cache[slug] = hospital_id
+            return hospital_id
+        if hospital_id is not None:
+            try:
+                hospital_id_int = int(hospital_id)
+                slug_hospital_cache[slug] = hospital_id_int
+                return hospital_id_int
+            except Exception as e:
+                print(f"[DEBUG] Exception converting hospital_id to int: {e}")
+                return None
+        return None
+    print(f"[DEBUG] No hospital found for slug: {slug}, returning None")
+    return None
+
+# Updated setup_tenant_context: prefer slug, fallback to JWT
+from fastapi.responses import JSONResponse
+
+def setup_tenant_context(request: Request, db: Session):
+    try:
+        print("[DEBUG] Entered setup_tenant_context")
+        # 1. Try to extract slug from URL
+        slug = extract_slug_from_path(request)
+        print(f"[DEBUG] Extracted slug: {slug}")
+        if slug:
+            hospital_id = get_hospital_id_by_slug(slug, db)
+            print(f"[DEBUG] Looked up hospital_id for slug '{slug}': {hospital_id} (type: {type(hospital_id)})")
+            print(f"[DEBUG] About to check 'if hospital_id is not None' for value: {hospital_id} (type: {type(hospital_id)})")
+            if hospital_id is not None:
+                print(f"[DEBUG] Setting tenant context for hospital_id: {hospital_id}")
+                tenant_middleware.set_hospital_context(hospital_id)
+                logger.debug(f"Set tenant context for slug '{slug}' (hospital_id={hospital_id})")
+                return
+            else:
+                # Invalid slug: raise 404
+                print(f"[DEBUG] Invalid hospital slug: {slug}, raising 404")
+                logger.warning(f"Invalid hospital slug: {slug}")
+                raise HTTPException(status_code=404, detail="Hospital not found for slug")
+        print("[DEBUG] No slug found, trying JWT fallback")
+        # 2. Fallback: extract hospital_id from JWT token
         hospital_id = extract_hospital_from_token(request)
-        
-        if hospital_id:
-            # Set the hospital context
+        print(f"[DEBUG] Fallback hospital_id from token: {hospital_id}")
+        if hospital_id is not None:
+            print(f"[DEBUG] Setting tenant context for hospital_id from JWT: {hospital_id}")
             tenant_middleware.set_hospital_context(hospital_id)
-            logger.debug(f"Set tenant context for hospital_id: {hospital_id}")
+            logger.debug(f"Set tenant context for hospital_id: {hospital_id} (from JWT)")
         else:
-            # Clear context if no hospital_id found
+            print("[DEBUG] No hospital_id found in JWT, clearing tenant context")
             tenant_middleware.clear_hospital_context()
             logger.debug("Cleared tenant context - no hospital_id found")
-            
+    except HTTPException:
+        print("[DEBUG] HTTPException raised in setup_tenant_context")
+        raise
     except Exception as e:
+        print(f"[DEBUG] Exception in setup_tenant_context: {e}")
         logger.error(f"Error setting up tenant context: {str(e)}")
         tenant_middleware.clear_hospital_context()
 
 def get_tenant_db() -> Session:
     """Get database session with tenant context"""
-    return get_db()
+    return next(get_db())
 
 # Database event listeners for automatic hospital filtering
 def setup_tenant_filters():
@@ -118,7 +188,7 @@ def setup_tenant_filters():
         # Get table names from the query
         table_names = set()
         for column in query.columns:
-            if hasattr(column, 'table') and column.table:
+            if hasattr(column, 'table') and column.table is not None:
                 table_names.add(column.table.name)
         
         # Check if any tenant-aware tables are involved

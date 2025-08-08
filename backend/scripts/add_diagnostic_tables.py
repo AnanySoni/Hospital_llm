@@ -13,7 +13,7 @@ from datetime import datetime
 backend_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
 sys.path.insert(0, backend_path)
 
-from core.database import get_db
+from backend.core.database import get_db
 from sqlalchemy import text
 
 def upgrade_diagnostic_schema():

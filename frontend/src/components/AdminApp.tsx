@@ -26,7 +26,11 @@ interface LoginResponse {
   user_info: User;
 }
 
-const AdminApp: React.FC = () => {
+interface AdminAppProps {
+  slug?: string;
+}
+
+const AdminApp: React.FC<AdminAppProps> = ({ slug }) => {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string>('');

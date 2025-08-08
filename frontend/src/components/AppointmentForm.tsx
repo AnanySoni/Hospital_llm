@@ -15,9 +15,10 @@ interface AppointmentFormProps {
   patientProfile?: PatientProfile | null;
   symptoms?: string;
   onPatientRecognized?: (smartWelcomeResponse: SmartWelcomeResponse) => void;
+  hospitalSlug?: string;
 }
 
-const AppointmentForm: React.FC<AppointmentFormProps> = ({ doctor, onSubmit, onCancel, patientProfile, symptoms, onPatientRecognized }) => {
+const AppointmentForm: React.FC<AppointmentFormProps> = ({ doctor, onSubmit, onCancel, patientProfile, symptoms, onPatientRecognized, hospitalSlug = 'demo1' }) => {
   const [patientName, setPatientName] = useState(patientProfile?.first_name || '');
   const [phoneNumber, setPhoneNumber] = useState(patientProfile?.phone_number || '');
   const [appointmentDate, setAppointmentDate] = useState('');
@@ -129,7 +130,7 @@ const AppointmentForm: React.FC<AppointmentFormProps> = ({ doctor, onSubmit, onC
     
     setIsLoadingSlots(true);
     try {
-      const response = await fetch(`http://localhost:8000/doctors/${doctor.id}/available-slots?date=${appointmentDate}`);
+      const response = await fetch(`http://localhost:8000/h/${hospitalSlug}/doctors/${doctor.id}/available-slots?date=${appointmentDate}`);
       if (response.ok) {
         const slots = await response.json();
         setAvailableSlots(slots);

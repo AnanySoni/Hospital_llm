@@ -10,8 +10,8 @@ from typing import List, Optional, Dict, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_, desc
 
-from core.models import PatientProfile, SymptomHistory, VisitHistory, ConversationSession
-from utils.llm_utils import call_groq_api
+from backend.core.models import PatientProfile, SymptomHistory, VisitHistory, ConversationSession
+from backend.utils.llm_utils import call_groq_api
 
 
 class PatientRecognitionService:

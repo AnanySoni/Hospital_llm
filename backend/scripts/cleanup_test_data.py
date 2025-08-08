@@ -30,8 +30,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import create_engine, func, and_, or_
 from sqlalchemy.orm import sessionmaker
-from core.database import DATABASE_URL
-from core.models import (
+from backend.core.database import DATABASE_URL
+from backend.core.models import (
     Base, Appointment, TestBooking, DiagnosticSession, QuestionAnswer,
     SessionUser, PatientProfile, SymptomHistory,
     VisitHistory, User, Patient, DoctorAvailability, Doctor

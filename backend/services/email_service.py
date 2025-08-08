@@ -14,7 +14,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 import logging
 
-from core.models import Doctor, AdminUser, Hospital
+from backend.core.models import Doctor, AdminUser, Hospital
 
 logger = logging.getLogger(__name__)
 

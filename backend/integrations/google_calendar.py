@@ -14,8 +14,8 @@ from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request as GoogleRequest
 
-from core.database import get_db
-from core import models
+from backend.core.database import get_db
+from backend.core import models
 
 router = APIRouter()
 

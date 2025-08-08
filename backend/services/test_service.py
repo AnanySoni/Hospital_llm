@@ -239,7 +239,7 @@ class TestService:
     @staticmethod
     async def get_test_recommendations_by_symptoms(symptoms: str) -> List[Dict]:
         """Get test recommendations based on symptoms using LLM"""
-        from utils.llm_utils import generate_test_recommendations
+        from backend.utils.llm_utils import generate_test_recommendations
         
         try:
             # Use LLM to generate intelligent test recommendations

@@ -6,8 +6,8 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.database import SessionLocal, engine
-from core.models import Base, PatientProfile, SymptomHistory, VisitHistory, ConversationSession
+from backend.core.database import SessionLocal, engine
+from backend.core.models import Base, PatientProfile, SymptomHistory, VisitHistory, ConversationSession
 from sqlalchemy import text
 import logging
 
@@ -79,7 +79,7 @@ def test_phone_recognition_functionality():
         logger.info("Testing phone recognition functionality...")
         
         # Test creating a patient profile
-        from services.patient_recognition_service import PatientRecognitionService
+        from backend.services.patient_recognition_service import PatientRecognitionService
         
         test_phone = "+1234567890"
         test_name = "Test Patient"

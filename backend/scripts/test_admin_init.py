@@ -8,8 +8,8 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy.orm import Session
-from core.database import get_db
-from core.models import Hospital, AdminUser, Role, Permission, UserRole
+from backend.core.database import get_db
+from backend.core.models import Hospital, AdminUser, Role, Permission, UserRole
 import bcrypt
 import json
 

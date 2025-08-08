@@ -3,38 +3,40 @@ Hospital Appointment System - Main Application
 Optimized FastAPI application with proper structure and organization
 """
 
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 import logging
 import json
 
 # Import from organized structure
-from core.database import get_db
-from core.models import Doctor, DoctorAvailability, Department
-from utils.llm_utils import (
+from backend.core.database import get_db
+from backend.core.models import Doctor, DoctorAvailability, Department
+from backend.utils.llm_utils import (
     get_doctor_recommendations,
     get_doctor_recommendations_with_history, start_diagnostic_session_with_history
 )
-from services import AppointmentService
-from services.test_service import TestService
-from services.session_service import SessionService
-from services.patient_recognition_service import PatientRecognitionService
-from middleware import setup_error_handlers
-from schemas import (
+from backend.services import AppointmentService
+from backend.services.test_service import TestService
+from backend.services.session_service import SessionService
+from backend.services.patient_recognition_service import PatientRecognitionService
+from backend.middleware import setup_error_handlers
+from backend.middleware.tenant_middleware import setup_tenant_context, get_db
+from backend.schemas import (
     SymptomsRequest, AppointmentRequest, RescheduleRequest,
     AppointmentResponse, RescheduleResponse, CancelResponse, DoctorRecommendation,
     RouterResponse, TestBookingRequest, TestBookingResponse,
     EnhancedChatRequest, SessionUserCreate, SessionHistoryResponse, PatientHistoryCreate,
     PhoneRecognitionRequest, SmartWelcomeRequest, PatientProfileResponse, SmartWelcomeResponse
 )
-from integrations import google_calendar_router
+from backend.integrations import google_calendar_router
 
 # Import adaptive routes
-from routes.adaptive_routes import router as adaptive_router
+from backend.routes.adaptive_routes import router as adaptive_router
 
 # Import admin routes
-from routes.admin_routes import router as admin_router
+from backend.routes.admin_routes import router as admin_router
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -48,8 +50,20 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
+
 # Set up error handlers
 setup_error_handlers(app)
+
+# Tenant isolation: run setup_tenant_context before each request
+@app.middleware("http")
+async def tenant_middleware(request: Request, call_next):
+    db = next(get_db())
+    try:
+        setup_tenant_context(request, db)
+    except HTTPException as e:
+        return JSONResponse(status_code=e.status_code, content={"detail": e.detail})
+    response = await call_next(request)
+    return response
 
 # Enable CORS
 app.add_middleware(
@@ -59,6 +73,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # Include Google Calendar router
 app.include_router(google_calendar_router, prefix="/auth", tags=["Google Calendar"])
@@ -133,11 +148,11 @@ async def recommend_doctors(request: SymptomsRequest, db: Session = Depends(get_
         raise
 
 
-@app.post("/book-appointment", response_model=AppointmentResponse)
-async def book_appointment(request: AppointmentRequest, db: Session = Depends(get_db)):
-    """Book a new appointment"""
+@app.post("/h/{slug}/book-appointment", response_model=AppointmentResponse)
+async def book_appointment(slug: str, request: AppointmentRequest, db: Session = Depends(get_db)):
+    """Book a new appointment with hospital slug"""
     try:
-        logger.info(f"Booking appointment for {request.patient_name} with doctor {request.doctor_id}")
+        logger.info(f"Booking appointment for {request.patient_name} with doctor {request.doctor_id} in hospital {slug}")
         
         result = await AppointmentService.create_appointment(
             db=db,
@@ -160,11 +175,11 @@ async def book_appointment(request: AppointmentRequest, db: Session = Depends(ge
         raise HTTPException(status_code=500, detail="An error occurred while booking the appointment")
 
 
-@app.put("/reschedule-appointment", response_model=RescheduleResponse)
-async def reschedule_appointment(request: RescheduleRequest, db: Session = Depends(get_db)):
-    """Reschedule an existing appointment"""
+@app.put("/h/{slug}/reschedule-appointment", response_model=RescheduleResponse)
+async def reschedule_appointment(slug: str, request: RescheduleRequest, db: Session = Depends(get_db)):
+    """Reschedule an existing appointment with hospital slug"""
     try:
-        logger.info(f"Rescheduling appointment {request.appointment_id} to {request.new_date} at {request.new_time}")
+        logger.info(f"Rescheduling appointment {request.appointment_id} to {request.new_date} at {request.new_time} in hospital {slug}")
         
         result = await AppointmentService.reschedule_appointment(
             db=db,
@@ -183,11 +198,11 @@ async def reschedule_appointment(request: RescheduleRequest, db: Session = Depen
         raise HTTPException(status_code=500, detail="An error occurred while rescheduling the appointment")
 
 
-@app.delete("/cancel-appointment/{appointment_id}", response_model=CancelResponse)
-async def cancel_appointment(appointment_id: int, db: Session = Depends(get_db)):
-    """Cancel an existing appointment"""
+@app.delete("/h/{slug}/cancel-appointment/{appointment_id}", response_model=CancelResponse)
+async def cancel_appointment(slug: str, appointment_id: int, db: Session = Depends(get_db)):
+    """Cancel an existing appointment with hospital slug"""
     try:
-        logger.info(f"Cancelling appointment {appointment_id}")
+        logger.info(f"Cancelling appointment {appointment_id} in hospital {slug}")
         
         result = await AppointmentService.cancel_appointment(
             db=db,
@@ -321,21 +336,28 @@ async def book_medical_test(request: dict):
         raise HTTPException(status_code=500, detail="An error occurred while booking the test")
 
 
-@app.get("/doctors/{doctor_id}/available-slots")
-async def get_available_slots(doctor_id: int, date: str, db: Session = Depends(get_db)):
-    """Get available time slots for a doctor on a specific date"""
+@app.get("/h/{slug}/doctors/{doctor_id}/available-slots")
+async def get_available_slots(slug: str, doctor_id: int, date: str, db: Session = Depends(get_db)):
+    """Get available time slots for a doctor on a specific date with hospital slug"""
     try:
         from datetime import datetime
         
+        logger.info(f"Getting slots for doctor {doctor_id} on date {date} in hospital {slug}")
+        
         # Parse the date
         appointment_date = datetime.strptime(date, "%Y-%m-%d").date()
+        logger.info(f"Parsed date: {appointment_date}")
         
         # Get available slots from the database
-        available_slots = db.query(DoctorAvailability).filter(
+        query = db.query(DoctorAvailability).filter(
             DoctorAvailability.doctor_id == doctor_id,
             DoctorAvailability.date == appointment_date,
             DoctorAvailability.is_booked == False
-        ).all()
+        )
+        
+        logger.info(f"SQL Query: {query.statement}")
+        available_slots = query.all()
+        logger.info(f"Found {len(available_slots)} available slots")
         
         # Convert to 12-hour format for display
         def convert_to_12hour(time_24):
@@ -483,11 +505,11 @@ async def calendar_setup_page(db: Session = Depends(get_db)):
 
 
 
-@app.post("/book-tests", response_model=TestBookingResponse)
-async def book_tests(request: TestBookingRequest):
-    """Book medical tests"""
+@app.post("/h/{slug}/book-tests", response_model=TestBookingResponse)
+async def book_tests(slug: str, request: TestBookingRequest):
+    """Book medical tests with hospital slug"""
     try:
-        logger.info(f"Booking tests for {request.patient_name}: {request.test_ids}")
+        logger.info(f"Booking tests for {request.patient_name}: {request.test_ids} in hospital {slug}")
         
         result = await TestService.book_tests(
             patient_name=request.patient_name,
@@ -868,7 +890,7 @@ async def phone_recognition(request: PhoneRecognitionRequest, db: Session = Depe
     try:
         logger.info(f"Phone recognition request for: {request.phone_number}")
         
-        from services.patient_recognition_service import PatientRecognitionService
+        from backend.services.patient_recognition_service import PatientRecognitionService
         
         patient_profile, is_new = PatientRecognitionService.find_or_create_patient_profile(
             db=db,
@@ -910,7 +932,7 @@ async def smart_welcome(request: SmartWelcomeRequest, db: Session = Depends(get_
     try:
         logger.info(f"Smart welcome for phone: {request.phone_number}, symptoms: {request.symptoms[:50]}...")
         
-        from services.patient_recognition_service import PatientRecognitionService
+        from backend.services.patient_recognition_service import PatientRecognitionService
         
         # Find or create patient profile  
         patient_profile, is_new = PatientRecognitionService.find_or_create_patient_profile(
@@ -981,8 +1003,8 @@ async def smart_welcome(request: SmartWelcomeRequest, db: Session = Depends(get_
 async def assess_urgency_legacy(request: dict):
     """Legacy urgency assessment endpoint - redirects to v2"""
     try:
-        from services.triage_service import TriageService
-        from schemas.triage_models import UrgencyAssessmentRequest
+        from backend.services.triage_service import TriageService
+        from backend.schemas.triage_models import UrgencyAssessmentRequest
         
         triage_service = TriageService()
         

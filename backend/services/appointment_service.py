@@ -8,11 +8,30 @@ from typing import List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 
-from core import models
-from integrations.google_calendar import create_calendar_event
+from backend.core import models
+from backend.integrations.google_calendar import create_calendar_event
 
 
 class AppointmentService:
+    @staticmethod
+    def get_appointments_by_hospital(db: Session, hospital_id: int = None, is_super_admin: bool = False) -> List[dict]:
+        """Get all appointments for a hospital, or all if superadmin"""
+        query = db.query(models.Appointment)
+        if not is_super_admin and hospital_id is not None:
+            query = query.filter(models.Appointment.hospital_id == hospital_id)
+        appointments = query.all()
+        result = []
+        for appointment in appointments:
+            doctor = db.query(models.Doctor).filter(models.Doctor.id == appointment.doctor_id).first()
+            result.append({
+                "id": appointment.id,
+                "doctor_name": doctor.name if doctor else "Unknown",
+                "appointment_date": appointment.date.strftime("%Y-%m-%d"),
+                "appointment_time": appointment.time_slot,
+                "status": appointment.status,
+                "notes": appointment.notes
+            })
+        return result
     
     @staticmethod
     async def create_appointment(

@@ -4,7 +4,7 @@ This adds Phase 1 session-based user tracking to your existing schema
 """
 
 from sqlalchemy import create_engine, text
-from core.database import engine, SessionLocal
+from backend.core.database import engine, SessionLocal
 
 def add_session_tracking_tables():
     """Add session tracking tables to existing database"""

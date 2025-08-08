@@ -80,11 +80,13 @@ def get_conversational_response() -> str:
         ]
     }])
 
-async def get_doctor_recommendations(symptoms: str, doctors: list):
+async def get_doctor_recommendations(symptoms: str, doctors: list, hospital_id: int = None):
     # First check if this is a conversational input rather than symptoms
     if is_conversational_input(symptoms):
         return get_conversational_response()
-    
+    # Filter doctors by hospital_id if provided
+    if hospital_id is not None:
+        doctors = [doc for doc in doctors if doc.get('hospital_id') == hospital_id]
     if not GROQ_API_KEY:
         # If no API key, return mock data for testing
         # Ensure we have at least 3 doctors to recommend
@@ -605,7 +607,7 @@ async def generate_predictive_diagnosis(symptoms: str, answers: dict) -> dict:
         }
 
 
-async def generate_test_recommendations(diagnosis: dict, symptoms: str) -> List[dict]:
+async def generate_test_recommendations(diagnosis: dict, symptoms: str, tests: list = None, hospital_id: int = None) -> list:
     """Generate test recommendations based on diagnosis"""
     
     system_message = """You are a medical AI assistant. Recommend appropriate medical tests based on the diagnosis and symptoms. 
@@ -638,21 +640,31 @@ async def generate_test_recommendations(diagnosis: dict, symptoms: str) -> List[
     
     try:
         response = await call_groq_api(prompt, system_message)
-        return json.loads(response)
+        test_recs = json.loads(response)
+        # Filter test recommendations by hospital_id if provided
+        if hospital_id is not None and tests is not None:
+            allowed_test_ids = {t['test_id'] for t in tests if t.get('hospital_id') == hospital_id or t.get('hospital_id') is None}
+            test_recs = [t for t in test_recs if t.get('test_id') in allowed_test_ids]
+        return test_recs
     except Exception as e:
         print(f"Error generating test recommendations: {e}")
-        return [
-            {
-                "test_id": "general_blood",
-                "test_name": "General Blood Panel",
-                "test_category": "Blood Test",
-                "description": "Basic blood work to assess overall health",
-                "urgency": "Within week",
-                "cost_estimate": "$100-200",
-                "preparation_required": "Fasting for 8-12 hours",
-                "why_recommended": "To establish baseline health markers and identify any abnormalities"
-            }
-        ]
+        fallback = {
+            "test_id": "general_blood",
+            "test_name": "General Blood Panel",
+            "test_category": "Blood Test",
+            "description": "Basic blood work to assess overall health",
+            "urgency": "Within week",
+            "cost_estimate": "$100-200",
+            "preparation_required": "Fasting for 8-12 hours",
+            "why_recommended": "To establish baseline health markers and identify any abnormalities"
+        }
+        if hospital_id is not None and tests is not None:
+            allowed_test_ids = {t['test_id'] for t in tests if t.get('hospital_id') == hospital_id or t.get('hospital_id') is None}
+            if fallback['test_id'] in allowed_test_ids:
+                return [fallback]
+            else:
+                return []
+        return [fallback]
 
 
 async def make_routing_decision(diagnosis: dict, test_recommendations: List[dict], doctors: List[dict]) -> dict:
@@ -1247,4 +1259,4 @@ async def generate_predictive_diagnosis_with_history(
             "urgency_level": "medium", 
             "recommended_action": "appointment",
             "explanation": f"I recommend consulting with a healthcare provider about your symptoms."
-        } 
+        }

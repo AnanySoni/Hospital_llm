@@ -4,8 +4,8 @@ Creates tables and populates with sample data
 """
 
 from sqlalchemy import create_engine, text
-from core.models import Base, Doctor, Department, Subdivision
-from core.database import SessionLocal, engine
+from backend.core.models import Base, Doctor, Department, Subdivision
+from backend.core.database import SessionLocal, engine
 import json
 
 def apply_session_tracking_migration():

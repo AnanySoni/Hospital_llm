@@ -12,7 +12,7 @@ from datetime import datetime, date
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy.orm import Session
-from core.database import get_db
+from backend.core.database import get_db
 from core import models
 from integrations.google_calendar import get_doctor_credentials
 

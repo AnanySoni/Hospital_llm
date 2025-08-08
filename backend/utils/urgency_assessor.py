@@ -8,9 +8,9 @@ import logging
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
-from schemas.triage_models import TriageLevel, TriageAssessment, RiskFactor, RedFlag
-from utils.llm_utils import call_groq_api
-from utils.confidence_utils import calculate_confidence_level, calculate_age_risk_multiplier
+from backend.schemas.triage_models import TriageLevel, TriageAssessment, RiskFactor, RedFlag
+from backend.utils.llm_utils import call_groq_api
+from backend.utils.confidence_utils import calculate_confidence_level, calculate_age_risk_multiplier
 
 logger = logging.getLogger(__name__)
 

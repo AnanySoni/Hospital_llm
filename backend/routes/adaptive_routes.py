@@ -1,25 +1,21 @@
-"""
-Adaptive Diagnostic Routes for Phase 1 Month 2
-New endpoints for advanced question generation (can coexist with existing endpoints)
-"""
-
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Path
 from typing import Dict, Any, Optional
 import logging
 
-from schemas.question_models import (
+from backend.schemas.question_models import (
     DiagnosticSessionCreate,
     AdaptiveRouterResponse,
     QuestionAnswer
 )
-from schemas.triage_models import (
+from backend.schemas.triage_models import (
     UrgencyAssessmentRequest,
     EmergencyCheckRequest,
     TriageResponse
 )
-from services.diagnostic_flow_service import DiagnosticFlowService
-from services.triage_service import TriageService
-from utils.urgency_assessor import assess_medical_urgency, quick_emergency_screening
+from backend.services.diagnostic_flow_service import DiagnosticFlowService
+from backend.services.triage_service import TriageService
+from backend.utils.urgency_assessor import assess_medical_urgency, quick_emergency_screening
+from backend.middleware.tenant_middleware import get_tenant_middleware
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v2", tags=["Adaptive Diagnostics"])
@@ -28,39 +24,47 @@ router = APIRouter(prefix="/v2", tags=["Adaptive Diagnostics"])
 diagnostic_flow = DiagnosticFlowService()
 triage_service = TriageService()
 
-@router.post("/start-adaptive-diagnostic", response_model=AdaptiveRouterResponse)
-async def start_adaptive_diagnostic(
-    symptoms: str,
-    session_id: str,
+# Multi-tenant route for adaptive diagnostic with slug
+@router.post("/h/{slug}/start-adaptive-diagnostic", response_model=AdaptiveRouterResponse)
+async def start_adaptive_diagnostic_with_slug(
+    slug: str = Path(..., description="Hospital slug for tenant isolation"),
+    symptoms: str = "",
+    session_id: str = "",
     patient_profile: Optional[Dict[str, Any]] = None
 ):
     """
-    Start a new adaptive diagnostic session with intelligent questioning
-    This is the v2 version that can run alongside existing /start-diagnostic
+    Multi-tenant: Start a new adaptive diagnostic session with hospital slug in path
     """
     try:
-        logger.info(f"Starting adaptive diagnostic for session {session_id}")
+        # Get tenant context from middleware
+        tenant_middleware = get_tenant_middleware()
+        hospital_id = tenant_middleware.get_hospital_context()
+        
+        logger.info(f"[Tenant] Starting adaptive diagnostic for slug {slug}, hospital_id {hospital_id}, session {session_id}")
         
         response = await diagnostic_flow.start_adaptive_diagnostic(
             session_id=session_id,
             symptoms=symptoms,
-            patient_profile=patient_profile
+            patient_profile=patient_profile,
+            hospital_id=hospital_id
         )
-        
         return response
-        
     except Exception as e:
         logger.error(f"Error in adaptive diagnostic start: {e}")
         raise HTTPException(
-            status_code=500, 
+            status_code=500,
             detail=f"Failed to start adaptive diagnostic: {str(e)}"
         )
 
-@router.post("/answer-adaptive-question", response_model=AdaptiveRouterResponse)
+# Legacy non-tenant route - REMOVED to enforce multi-tenant architecture
+# All adaptive diagnostic calls must now use /h/{slug}/start-adaptive-diagnostic
+
+@router.post("/h/{slug}/answer-adaptive-question", response_model=AdaptiveRouterResponse)
 async def answer_adaptive_question(
-    session_id: str,
-    question_id: int,
-    answer_value: Any,
+    slug: str = Path(..., description="Hospital slug for tenant isolation"),
+    session_id: str = "",
+    question_id: int = 0,
+    answer_value: Any = None,
     question_text: Optional[str] = None,
     question_type: Optional[str] = None
 ):
@@ -69,7 +73,11 @@ async def answer_adaptive_question(
     This is the v2 version that can run alongside existing /answer-diagnostic
     """
     try:
-        logger.info(f"Processing answer for session {session_id}, question {question_id}")
+        # Get tenant context from middleware
+        tenant_middleware = get_tenant_middleware()
+        hospital_id = tenant_middleware.get_hospital_context()
+        
+        logger.info(f"Processing answer for session {session_id}, question {question_id}, hospital_id {hospital_id}")
         
         # Prepare answer payload
         answer_data = {
@@ -81,7 +89,8 @@ async def answer_adaptive_question(
         response = await diagnostic_flow.process_answer_and_continue(
             session_id=session_id,
             question_id=question_id,
-            answer=answer_data
+            answer=answer_data,
+            hospital_id=hospital_id
         )
         
         return response

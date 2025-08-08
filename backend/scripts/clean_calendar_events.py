@@ -31,8 +31,8 @@ except ImportError:
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from core.database import DATABASE_URL
-from core.models import Doctor
+from backend.core.database import DATABASE_URL
+from backend.core.models import Doctor
 
 def get_db_session():
     """Create database session"""

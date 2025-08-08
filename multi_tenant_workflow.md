@@ -316,6 +316,7 @@ This workflow ensures that each hospital operates in complete isolation while sh
   - Any other tenant-specific tables
 
 ### **Step 1.2: Create Hospitals Table**
+
 - **New table**: `hospitals`
   - `hospital_id` (PK, auto-increment)
   - `slug` (unique, e.g., "demo1", "demo2")
@@ -526,7 +527,7 @@ This workflow ensures that each hospital operates in complete isolation while sh
 - **Security testing** for data leakage
 
 ---
-
+ 
 ## **PHASE 7: Deployment & Configuration**
 
 ### **Step 7.1: Environment Configuration**

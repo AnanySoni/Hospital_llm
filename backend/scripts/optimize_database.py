@@ -3,7 +3,7 @@ Database optimization script
 Run this to add indexes and constraints for better performance
 """
 
-from core.database import engine
+from backend.core.database import engine
 from sqlalchemy import text
 
 def apply_database_optimizations():

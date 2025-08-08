@@ -6,13 +6,14 @@ Generates persuasive messages to encourage appointment/test booking
 import json
 import asyncio
 from typing import Optional, Dict, Any, List
-from schemas.request_models import (
+from backend.schemas.request_models import (
     ConsequenceMessage, RiskProgression, PersuasionMetrics,
     PredictiveDiagnosis, ConfidenceScore
 )
-from schemas.triage_models import TriageLevel, TriageAssessment
-from utils.llm_utils import call_groq_api
-from utils.advanced_prompt_builder import build_advanced_consequence_prompt
+from backend.schemas.triage_models import TriageLevel, TriageAssessment
+from backend.utils.llm_utils import call_groq_api
+from backend.utils.advanced_prompt_builder import build_advanced_consequence_prompt
+from backend.utils.adaptive_question_generator import AdaptiveQuestionGenerator
 
 
 class ConsequenceMessagingService:

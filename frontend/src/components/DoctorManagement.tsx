@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { useHospital } from '../contexts/HospitalContext';
+import { apiFetch } from '../utils/api';
 import { 
   UserPlus, 
   Plus, 
@@ -77,104 +79,22 @@ const DoctorManagement: React.FC<DoctorManagementProps> = ({ currentUser }) => {
   const departments = ['Cardiology', 'Neurology', 'Pediatrics', 'Orthopedics', 'Dermatology', 'General Medicine'];
   const specializations = ['Cardiologist', 'Neurologist', 'Pediatrician', 'Orthopedic Surgeon', 'Dermatologist', 'General Physician'];
 
+  const { hospital } = useHospital();
+
   useEffect(() => {
     fetchDoctors();
-  }, [currentPage, searchTerm, filterDepartment, filterStatus, filterCalendar]);
+  }, [currentPage, searchTerm, filterDepartment, filterStatus, filterCalendar, hospital]);
 
   const fetchDoctors = async () => {
     try {
       setLoading(true);
       const token = localStorage.getItem('admin_access_token');
-      
-      // For now, using mock data since the actual API might not be implemented
-      const mockDoctors: Doctor[] = [
-        {
-          id: 1,
-          name: "Dr. Sarah Johnson",
-          email: "sarah.johnson@hospital.com",
-          phone: "+1-555-0123",
-          specialization: "Cardiologist",
-          department: "Cardiology",
-          experience_years: 12,
-          qualification: "MD, FACC",
-          consultation_fee: 150,
-          languages: ["English", "Spanish"],
-          availability_status: "available",
-          calendar_connected: true,
-          google_calendar_id: "sarah.johnson@hospital.com",
-          rating: 4.8,
-          total_consultations: 245,
-          created_at: "2024-01-15T08:00:00Z",
-          updated_at: "2024-01-20T10:30:00Z",
-          working_hours: {
-            monday: { start: "09:00", end: "17:00", is_available: true },
-            tuesday: { start: "09:00", end: "17:00", is_available: true },
-            wednesday: { start: "09:00", end: "17:00", is_available: true },
-            thursday: { start: "09:00", end: "17:00", is_available: true },
-            friday: { start: "09:00", end: "17:00", is_available: true },
-            saturday: { start: "09:00", end: "13:00", is_available: true },
-            sunday: { start: "00:00", end: "00:00", is_available: false }
-          }
-        },
-        {
-          id: 2,
-          name: "Dr. Michael Chen",
-          email: "michael.chen@hospital.com",
-          phone: "+1-555-0124",
-          specialization: "Neurologist",
-          department: "Neurology",
-          experience_years: 8,
-          qualification: "MD, PhD",
-          consultation_fee: 200,
-          languages: ["English", "Mandarin"],
-          availability_status: "busy",
-          calendar_connected: false,
-          google_calendar_id: null,
-          rating: 4.6,
-          total_consultations: 189,
-          created_at: "2024-01-10T08:00:00Z",
-          updated_at: "2024-01-18T14:15:00Z",
-          working_hours: {
-            monday: { start: "08:00", end: "16:00", is_available: true },
-            tuesday: { start: "08:00", end: "16:00", is_available: true },
-            wednesday: { start: "08:00", end: "16:00", is_available: true },
-            thursday: { start: "08:00", end: "16:00", is_available: true },
-            friday: { start: "08:00", end: "16:00", is_available: true },
-            saturday: { start: "00:00", end: "00:00", is_available: false },
-            sunday: { start: "00:00", end: "00:00", is_available: false }
-          }
-        },
-        {
-          id: 3,
-          name: "Dr. Emily Rodriguez",
-          email: "emily.rodriguez@hospital.com",
-          phone: "+1-555-0125",
-          specialization: "Pediatrician",
-          department: "Pediatrics",
-          experience_years: 6,
-          qualification: "MD, FAAP",
-          consultation_fee: 120,
-          languages: ["English", "Spanish", "Portuguese"],
-          availability_status: "available",
-          calendar_connected: true,
-          google_calendar_id: "emily.rodriguez@hospital.com",
-          rating: 4.9,
-          total_consultations: 312,
-          created_at: "2024-01-12T08:00:00Z",
-          updated_at: "2024-01-19T09:45:00Z",
-          working_hours: {
-            monday: { start: "10:00", end: "18:00", is_available: true },
-            tuesday: { start: "10:00", end: "18:00", is_available: true },
-            wednesday: { start: "10:00", end: "18:00", is_available: true },
-            thursday: { start: "10:00", end: "18:00", is_available: true },
-            friday: { start: "10:00", end: "18:00", is_available: true },
-            saturday: { start: "10:00", end: "14:00", is_available: true },
-            sunday: { start: "00:00", end: "00:00", is_available: false }
-          }
-        }
-      ];
-
-      setDoctors(mockDoctors);
+      // Use hospital slug for API call
+      const doctors = await apiFetch('/admin/doctors', {
+        slug: hospital?.slug || '',
+        token: token || undefined
+      });
+      setDoctors(Array.isArray(doctors) ? doctors : doctors.doctors || []);
     } catch (err: any) {
       setError(err.message || 'Failed to fetch doctors');
     } finally {

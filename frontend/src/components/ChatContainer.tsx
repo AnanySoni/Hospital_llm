@@ -5,14 +5,18 @@ import ChatInput from './ChatInput';
 import WelcomeScreen from './WelcomeScreen';
 import { SessionStorageManager } from '../utils/sessionStorage';
 import { useProgress } from '../contexts/ProgressContext';
+import { useHospital } from '../contexts/HospitalContext';
+import { apiFetch } from '../utils/api';
 
 interface ChatContainerProps {
   isCalendarConnected?: boolean;
   clearChatFlag?: boolean;
   onClearChatHandled?: () => void;
+  slug?: string;
 }
 
-const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = false, clearChatFlag, onClearChatHandled }) => {
+const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = false, clearChatFlag, onClearChatHandled, slug }) => {
+  const { hospital } = useHospital();
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [diagnosticState, setDiagnosticState] = useState<{
@@ -157,26 +161,22 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
       updateStep('diagnosis', 'completed');
       
     try {
-        // Get test recommendations using LLM
-        const response = await fetch(`http://localhost:8000/tests/recommendations/${encodeURIComponent(diagnosticState.symptoms)}`, {
-          method: 'GET',
-        });
-        const tests = await response.json();
-        
-        addMessage({
-          content: "Based on your diagnosis, here are the recommended medical tests:",
-          role: 'assistant',
-          type: 'tests',
-          tests: tests,
-        });
-      } catch (error) {
-        console.error('Error getting test recommendations:', error);
-        addMessage({
-          content: "I'm sorry, there was an error getting test recommendations. Please try again.",
-          role: 'assistant',
-          type: 'text'
-        });
-      }
+      // Get test recommendations using LLM, scoped to hospital
+      const tests = await apiFetch(`/tests/recommendations/${encodeURIComponent(diagnosticState.symptoms)}`, { slug: '' });
+      addMessage({
+        content: "Based on your diagnosis, here are the recommended medical tests:",
+        role: 'assistant',
+        type: 'tests',
+        tests: tests,
+      });
+    } catch (error) {
+      console.error('Error getting test recommendations:', error);
+      addMessage({
+        content: "I'm sorry, there was an error getting test recommendations. Please try again.",
+        role: 'assistant',
+        type: 'text'
+      });
+    }
       setIsLoading(false);
       return;
     }
@@ -188,14 +188,12 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
       updateStep('diagnosis', 'completed');
       
       try {
-        // Get doctor recommendations using LLM
-      const response = await fetch('http://localhost:8000/recommend-doctors', {
+        // Get doctor recommendations using LLM, scoped to hospital
+        const doctors = await apiFetch('/recommend-doctors', {
+          slug: '',
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ symptoms: diagnosticState.symptoms }),
+          body: { symptoms: diagnosticState.symptoms }
         });
-        const doctors = await response.json();
-        
         addMessage({
           content: "Based on your diagnosis, here are the recommended doctors:",
           role: 'assistant',
@@ -236,11 +234,10 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
         }
       }
       
-      const response = await fetch(`http://localhost:8000/v2/answer-adaptive-question?${urlParams.toString()}`, {
+      const result: RouterResponse = await apiFetch(`/v2/h/${hospital?.slug || slug || ''}/answer-adaptive-question?${urlParams.toString()}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        slug: ''
       });
-      const result: RouterResponse = await response.json();
       
       if ((result.next_step === 'answer_question' || result.next_step === 'continue_diagnostic') && result.current_question) {
         addMessage({ content: result.message, role: 'assistant', type: 'text' });
@@ -291,10 +288,10 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
         // Start diagnostic session with critical questions for proper symptoms
         try {
           const newSessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-          const response = await fetch(`http://localhost:8000/v2/start-adaptive-diagnostic?symptoms=${encodeURIComponent(content)}&session_id=${newSessionId}`, {
+          const result: RouterResponse = await apiFetch(`/v2/h/${hospital?.slug || slug || ''}/start-adaptive-diagnostic?symptoms=${encodeURIComponent(content)}&session_id=${newSessionId}`, {
             method: 'POST',
+            slug: ''
           });
-          const result: RouterResponse = await response.json();
 
           setDiagnosticState({ 
             sessionId: result.session_id, 
@@ -373,18 +370,11 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
     }
     
     try {
-    const response = await fetch('http://localhost:8000/book-appointment', {
+    const result = await apiFetch(`/h/${hospital?.slug || slug || ''}/book-appointment`, {
+      slug: '',
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(enhancedAppointmentData),
+      body: enhancedAppointmentData
     });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || `HTTP ${response.status}: Failed to book appointment`);
-      }
-
-    const result = await response.json();
       console.log('Appointment booking result:', result); // Debug log
     setMessages(prev => prev.filter(m => m.type !== 'appointment-form'));
     
@@ -457,18 +447,11 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
   const handleTestSubmit = async (bookingData: any) => {
     setIsLoading(true);
     try {
-      const response = await fetch('http://localhost:8000/book-tests', {
+      const result = await apiFetch(`/h/${hospital?.slug || slug || ''}/book-tests`, {
+        slug: '',
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(bookingData),
+        body: bookingData
       });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Failed to book tests');
-      }
-
-      const result = await response.json();
 
       // Remove the test form message
       setMessages(prev => prev.filter(m => m.type !== 'test_form'));
@@ -549,22 +532,15 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
     
     setIsLoading(true);
     try {
-      const response = await fetch('http://localhost:8000/reschedule-appointment', {
+      const result = await apiFetch('/reschedule-appointment', {
+        slug: hospital?.slug || slug || '',
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+        body: {
           appointment_id: appointmentId,
           new_date: newDate,
           new_time: newTime
-        }),
+        }
       });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Failed to reschedule appointment');
-      }
-
-      const result = await response.json();
 
       // Remove the reschedule form message
       setMessages(prev => prev.filter(m => m.type !== 'reschedule-form'));
@@ -628,7 +604,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
     
     setIsLoading(true);
     try {
-      const response = await fetch(`http://localhost:8000/cancel-appointment/${appointmentId}`, {
+      const response = await fetch(`http://localhost:8000/h/${slug}/cancel-appointment/${appointmentId}`, {
         method: 'DELETE',
       });
       
@@ -660,7 +636,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
   const handleCancelTest = async (bookingId: string) => {
     setIsLoading(true);
     try {
-      const response = await fetch(`http://localhost:8000/cancel-test/${bookingId}`, {
+      const response = await fetch(`http://localhost:8000/tests/cancel/${bookingId}`, {
         method: 'DELETE',
       });
       
@@ -748,6 +724,7 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
                   onCancelTest={handleCancelTest}
                   onPatientRecognized={handlePatientRecognized}
                   isLoading={isLoading}
+                  hospitalSlug={slug || 'demo1'}
                 />
               ))}
             </div>

@@ -9,21 +9,21 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime
 from sqlalchemy.orm import Session
 
-from core.database import get_db
-from core.models import DiagnosticSession, QuestionAnswer as DBQuestionAnswer
-from schemas.question_models import (
+from backend.core.database import get_db
+from backend.core.models import DiagnosticSession, QuestionAnswer as DBQuestionAnswer
+from backend.schemas.question_models import (
     DiagnosticQuestion,
     QuestionAnswer,
     DiagnosticSessionCreate,
     AdaptiveRouterResponse,
     ConfidenceGapAnalysis
 )
-from schemas.request_models import RouterResponse, PredictiveDiagnosis, ConsequenceMessage, RiskProgression, PersuasionMetrics
-from utils.adaptive_question_generator import AdaptiveQuestionGenerator
-from utils.llm_utils import generate_predictive_diagnosis, make_routing_decision
-from services.triage_service import TriageService
-from services.consequence_messaging_service import ConsequenceMessagingService
-from utils.urgency_assessor import assess_medical_urgency
+from backend.schemas.request_models import RouterResponse, PredictiveDiagnosis, ConsequenceMessage, RiskProgression, PersuasionMetrics
+from backend.utils.adaptive_question_generator import AdaptiveQuestionGenerator
+from backend.utils.llm_utils import generate_predictive_diagnosis, make_routing_decision
+from backend.services.triage_service import TriageService
+from backend.services.consequence_messaging_service import ConsequenceMessagingService
+from backend.utils.urgency_assessor import assess_medical_urgency
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,9 @@ class DiagnosticFlowService:
         self,
         session_id: str,
         symptoms: str,
-        patient_profile: Optional[Dict[str, Any]] = None
+        patient_profile: Optional[Dict[str, Any]] = None,
+        hospital_id: int = None,
+        is_super_admin: bool = False
     ) -> AdaptiveRouterResponse:
         """Start a new adaptive diagnostic session"""
         
@@ -50,7 +52,9 @@ class DiagnosticFlowService:
             db_session = await self.create_diagnostic_session(
                 session_id=session_id,
                 symptoms=symptoms,
-                patient_profile=patient_profile or {}
+                patient_profile=patient_profile or {},
+                hospital_id=hospital_id,
+                is_super_admin=is_super_admin
             )
             
             # Generate first question
@@ -91,13 +95,15 @@ class DiagnosticFlowService:
         self,
         session_id: str,
         question_id: int,
-        answer: Dict[str, Any]
+        answer: Dict[str, Any],
+        hospital_id: int = None,
+        is_super_admin: bool = False
     ) -> AdaptiveRouterResponse:
         """Process user answer and determine next step"""
         
         try:
             # Get diagnostic session
-            db_session = await self.get_diagnostic_session(session_id)
+            db_session = await self.get_diagnostic_session(session_id, hospital_id, is_super_admin)
             if not db_session:
                 raise ValueError(f"Diagnostic session {session_id} not found")
             
@@ -105,11 +111,13 @@ class DiagnosticFlowService:
             await self.record_answer(
                 session_id=session_id,
                 question_id=question_id,
-                answer=answer
+                answer=answer,
+                hospital_id=hospital_id,
+                is_super_admin=is_super_admin
             )
             
             # Get updated answer history
-            answer_history = await self.get_answer_history(session_id)
+            answer_history = await self.get_answer_history(session_id, hospital_id, is_super_admin)
             
             # Decide: continue questions or provide diagnosis?
             should_continue = await self.should_continue_questioning(
@@ -140,16 +148,19 @@ class DiagnosticFlowService:
         self,
         session_id: str,
         symptoms: str,
-        patient_profile: Dict[str, Any]
+        patient_profile: Dict[str, Any],
+        hospital_id: int = None,
+        is_super_admin: bool = False
     ) -> DiagnosticSession:
         """Create new diagnostic session in database"""
         
         db = self.get_db_session()
         try:
             # Check if session already exists
-            existing = db.query(DiagnosticSession).filter(
-                DiagnosticSession.session_id == session_id
-            ).first()
+            query = db.query(DiagnosticSession).filter(DiagnosticSession.session_id == session_id)
+            if not is_super_admin and hospital_id is not None:
+                query = query.filter(DiagnosticSession.hospital_id == hospital_id)
+            existing = query.first()
             
             if existing:
                 return existing
@@ -161,7 +172,8 @@ class DiagnosticFlowService:
                 initial_symptoms=symptoms,
                 patient_profile=json.dumps(patient_profile),
                 status="active",
-                max_questions=5
+                max_questions=5,
+                hospital_id=hospital_id
             )
             
             db.add(db_session)
@@ -178,14 +190,14 @@ class DiagnosticFlowService:
         finally:
             db.close()
     
-    async def get_diagnostic_session(self, session_id: str) -> Optional[DiagnosticSession]:
-        """Get diagnostic session from database"""
-        
+    async def get_diagnostic_session(self, session_id: str, hospital_id: int = None, is_super_admin: bool = False) -> Optional[DiagnosticSession]:
+        """Get diagnostic session from database, filtered by hospital_id unless superadmin"""
         db = self.get_db_session()
         try:
-            return db.query(DiagnosticSession).filter(
-                DiagnosticSession.session_id == session_id
-            ).first()
+            query = db.query(DiagnosticSession).filter(DiagnosticSession.session_id == session_id)
+            if not is_super_admin and hospital_id is not None:
+                query = query.filter(DiagnosticSession.hospital_id == hospital_id)
+            return query.first()
         finally:
             db.close()
     
@@ -193,16 +205,19 @@ class DiagnosticFlowService:
         self,
         session_id: str,
         question_id: int,
-        answer: Dict[str, Any]
+        answer: Dict[str, Any],
+        hospital_id: int = None,
+        is_super_admin: bool = False
     ) -> None:
         """Record user's answer to a question"""
         
         db = self.get_db_session()
         try:
             # Get diagnostic session
-            db_session = db.query(DiagnosticSession).filter(
-                DiagnosticSession.session_id == session_id
-            ).first()
+            query = db.query(DiagnosticSession).filter(DiagnosticSession.session_id == session_id)
+            if not is_super_admin and hospital_id is not None:
+                query = query.filter(DiagnosticSession.hospital_id == hospital_id)
+            db_session = query.first()
             
             if not db_session:
                 raise ValueError(f"Diagnostic session {session_id} not found")
@@ -238,24 +253,21 @@ class DiagnosticFlowService:
         finally:
             db.close()
     
-    async def get_answer_history(self, session_id: str) -> List[QuestionAnswer]:
-        """Get answer history for a session"""
-        
+    async def get_answer_history(self, session_id: str, hospital_id: int = None, is_super_admin: bool = False) -> List[QuestionAnswer]:
+        """Get answer history for a session, filtered by hospital_id unless superadmin"""
         db = self.get_db_session()
         try:
             # Get diagnostic session
-            db_session = db.query(DiagnosticSession).filter(
-                DiagnosticSession.session_id == session_id
-            ).first()
-            
+            query = db.query(DiagnosticSession).filter(DiagnosticSession.session_id == session_id)
+            if not is_super_admin and hospital_id is not None:
+                query = query.filter(DiagnosticSession.hospital_id == hospital_id)
+            db_session = query.first()
             if not db_session:
                 return []
-            
             # Get answers
             answers = db.query(DBQuestionAnswer).filter(
                 DBQuestionAnswer.diagnostic_session_id == db_session.id
             ).order_by(DBQuestionAnswer.asked_at).all()
-            
             # Convert to schema objects with extended fields
             history = []
             for ans in answers:
@@ -267,9 +279,7 @@ class DiagnosticFlowService:
                     question_type=ans.question_type
                 )
                 history.append(qa)
-            
             return history
-            
         finally:
             db.close()
     
@@ -556,22 +566,20 @@ class DiagnosticFlowService:
         
         return " | ".join(enhanced)
     
-    async def complete_session(self, session_id: str) -> None:
-        """Mark diagnostic session as completed"""
-        
+    async def complete_session(self, session_id: str, hospital_id: int = None, is_super_admin: bool = False) -> None:
+        """Mark diagnostic session as completed, filtered by hospital_id unless superadmin"""
         db = self.get_db_session()
         try:
-            session = db.query(DiagnosticSession).filter(
-                DiagnosticSession.session_id == session_id
-            ).first()
-            
+            query = db.query(DiagnosticSession).filter(DiagnosticSession.session_id == session_id)
+            if not is_super_admin and hospital_id is not None:
+                query = query.filter(DiagnosticSession.hospital_id == hospital_id)
+            session = query.first()
             if session:
                 session.status = "completed"
                 session.updated_at = datetime.utcnow()
                 db.commit()
-                
         except Exception as e:
             db.rollback()
             logger.error(f"Error completing session: {e}")
         finally:
-            db.close() 
+            db.close()

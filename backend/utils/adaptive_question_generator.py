@@ -8,14 +8,14 @@ import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
-from schemas.question_models import (
+from backend.schemas.question_models import (
     DiagnosticQuestion, 
     QuestionAnswer, 
     ConfidenceGapAnalysis,
     QuestionGenerationRequest,
     QuestionGenerationResponse
 )
-from utils.llm_utils import call_groq_api
+from backend.utils.llm_utils import call_groq_api
 
 logger = logging.getLogger(__name__)
 

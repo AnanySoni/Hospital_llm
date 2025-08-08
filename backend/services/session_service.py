@@ -9,12 +9,12 @@ from typing import Optional, Dict, List, Any
 from datetime import datetime, timedelta
 import json
 
-from core.models import (
+from backend.core.models import (
     SessionUser, Patient, MedicalHistory, FamilyHistory, Medication, 
     Allergy, SymptomLog, TestResult, PatientNote, Vaccination,
     DiagnosticSession, ConversationSession
 )
-from schemas.request_models import SessionUserCreate, PatientHistoryResponse
+from backend.schemas.request_models import SessionUserCreate, PatientHistoryResponse
 
 class SessionService:
     def __init__(self, db: Session):

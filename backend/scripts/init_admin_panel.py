@@ -8,9 +8,9 @@ import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy.orm import Session
-from core.database import get_db
-from core.models import Hospital, AdminUser, Role, Permission, UserRole
-from services.auth_service import AuthService
+from backend.core.database import get_db
+from backend.core.models import Hospital, AdminUser, Role, Permission, UserRole
+from backend.services.auth_service import AuthService
 import json
 
 def create_default_permissions(db: Session):
@@ -135,95 +135,41 @@ def create_default_roles(db: Session):
     db.commit()
     print("Default roles created successfully")
 
-def create_default_hospitals(db: Session):
-    """Create default hospitals"""
-    hospitals_data = [
-        {
-            "hospital_id": "demo_hospital",
-            "name": "Demo Hospital",
-            "display_name": "Demo Hospital - Main Branch",
-            "address": "123 Healthcare Street, Medical District",
-            "phone": "+91-9876543210",
-            "email": "admin@demohospital.com",
-            "website": "https://demohospital.com",
-            "subscription_plan": "premium",
-            "max_doctors": 50,
-            "max_patients": 5000,
-            "google_workspace_domain": "demohospital.com"
-        },
-        {
-            "hospital_id": "apollo_delhi",
-            "name": "Apollo Hospitals",
-            "display_name": "Apollo Hospitals - Delhi",
-            "address": "456 Apollo Road, Delhi",
-            "phone": "+91-9876543211",
-            "email": "admin@apollodelhi.com",
-            "website": "https://apollodelhi.com",
-            "subscription_plan": "enterprise",
-            "max_doctors": 100,
-            "max_patients": 10000,
-            "google_workspace_domain": "apollodelhi.com"
-        }
-    ]
-    
-    for hospital_data in hospitals_data:
-        existing = db.query(Hospital).filter_by(hospital_id=hospital_data["hospital_id"]).first()
-        if not existing:
-            hospital = Hospital(**hospital_data)
-            db.add(hospital)
-            print(f"Created hospital: {hospital_data['name']}")
-    
+def create_hospital_admins(db: Session):
+    """Create a hospital admin user for each existing hospital if not present"""
+    hospitals = db.query(Hospital).all()
+    hospital_admin_role = db.query(Role).filter_by(name="hospital_admin").first()
+    if not hospital_admin_role:
+        print("Hospital admin role not found. Please create roles first.")
+        return
+    for hospital in hospitals:
+        username = f"admin_{hospital.slug}"
+        existing_admin = db.query(AdminUser).filter_by(username=username).first()
+        if existing_admin:
+            print(f"Admin user already exists for hospital {hospital.slug}")
+            continue
+        admin_user = AdminUser(
+            hospital_id=hospital.id,
+            username=username,
+            email=f"{username}@{hospital.slug}.com",
+            password_hash=AuthService.hash_password("Admin@123"),
+            first_name="Admin",
+            last_name=hospital.name,
+            phone="+91-9999999999",
+            is_active=True,
+            is_super_admin=False  # Hospital admin, not super admin
+        )
+        db.add(admin_user)
+        db.flush()
+        user_role = UserRole(
+            admin_user_id=admin_user.id,
+            role_id=hospital_admin_role.id,
+            granted_by=admin_user.id
+        )
+        db.add(user_role)
+        print(f"Created admin user for hospital {hospital.slug} (username: {username})")
     db.commit()
-    print("Default hospitals created successfully")
-
-def create_super_admin(db: Session):
-    """Create a super admin user"""
-    # Get the demo hospital
-    demo_hospital = db.query(Hospital).filter_by(hospital_id="demo_hospital").first()
-    if not demo_hospital:
-        print("Demo hospital not found. Please create hospitals first.")
-        return
-    
-    # Get super admin role
-    super_admin_role = db.query(Role).filter_by(name="super_admin").first()
-    if not super_admin_role:
-        print("Super admin role not found. Please create roles first.")
-        return
-    
-    # Check if super admin already exists
-    existing_admin = db.query(AdminUser).filter_by(username="superadmin").first()
-    if existing_admin:
-        print("Super admin user already exists")
-        return
-    
-    # Create super admin user
-    super_admin = AdminUser(
-        hospital_id=demo_hospital.id,
-        username="superadmin",
-        email="superadmin@demohospital.com",
-        password_hash=AuthService.hash_password("Admin@123"),
-        first_name="Super",
-        last_name="Administrator",
-        phone="+91-9876543210",
-        is_active=True,
-        is_super_admin=True
-    )
-    db.add(super_admin)
-    db.flush()  # Get the ID
-    
-    # Assign super admin role
-    user_role = UserRole(
-        admin_user_id=super_admin.id,
-        role_id=super_admin_role.id,
-        granted_by=super_admin.id
-    )
-    db.add(user_role)
-    
-    db.commit()
-    print("Super admin user created successfully")
-    print("Username: superadmin")
-    print("Password: Admin@123")
-    print("Email: superadmin@demohospital.com")
+    print("Hospital admin users created successfully.")
 
 def main():
     """Main initialization function"""
@@ -241,19 +187,19 @@ def main():
         print("\n2. Creating default roles...")
         create_default_roles(db)
         
-        # Create hospitals
-        print("\n3. Creating default hospitals...")
-        create_default_hospitals(db)
+        # Create hospital admin users for existing hospitals
+        print("\n3. Creating hospital admin users for existing hospitals...")
+        create_hospital_admins(db)
         
         # Create super admin
-        print("\n4. Creating super admin user...")
-        create_super_admin(db)
+        # print("\n4. Creating super admin user...")
+        # create_super_admin(db)  # Skip creating or duplicating super admin
         
         print("\n✅ Admin panel initialization completed successfully!")
         print("\n📋 Default Login Credentials:")
-        print("   Username: superadmin")
+        print("   Username: admin_<slug>")
         print("   Password: Admin@123")
-        print("   Email: superadmin@demohospital.com")
+        print("   Email: admin_<slug>@<slug>.com")
         print("\n🔗 Access the admin panel at: http://localhost:8000/admin")
         
     except Exception as e:

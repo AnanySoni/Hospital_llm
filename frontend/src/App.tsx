@@ -1,5 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
+import { BrowserRouter as Router, Routes, Route, useParams, Navigate, useLocation } from 'react-router-dom';
 import ChatContainer from './components/ChatContainer';
+import { HospitalProvider, useHospital } from './contexts/HospitalContext';
 import GoogleCalendarConnect from './components/GoogleCalendarConnect';
 import ProgressSidebar from './components/ProgressSidebar';
 import ProgressToggle from './components/ProgressToggle';
@@ -7,7 +9,8 @@ import MobileProgressBar from './components/MobileProgressBar';
 import AdminApp from './components/AdminApp';
 import { ProgressProvider, useProgress } from './contexts/ProgressContext';
 
-function AppContent() {
+// Removed stray untyped function signature for AppContent
+function AppContent({ slug }: { slug?: string }) {
   const [isCalendarConnected, setIsCalendarConnected] = useState(false);
   const { progressState } = useProgress();
   const [clearChatFlag, setClearChatFlag] = useState(false);
@@ -27,7 +30,6 @@ function AppContent() {
               <p className="text-gray-400 text-xs sm:text-sm truncate">Your medical consultation companion</p>
             </div>
           </div>
-          
           {/* Action Buttons */}
           <div className="flex items-center space-x-1 sm:space-x-2 flex-shrink-0">
             <ProgressToggle />
@@ -45,17 +47,16 @@ function AppContent() {
           isVisible={progressState.isVisible}
           onClearChat={handleClearChat}
         />
-        
         {/* Chat Container */}
         <div className="flex-1 min-w-0 overflow-hidden">
           <ChatContainer 
             isCalendarConnected={isCalendarConnected} 
             clearChatFlag={clearChatFlag} 
             onClearChatHandled={() => setClearChatFlag(false)} 
+            slug={slug}
           />
         </div>
       </main>
-      
       {/* Mobile Progress Bar */}
       <MobileProgressBar 
         steps={progressState.steps}
@@ -66,28 +67,77 @@ function AppContent() {
   );
 }
 
-function App() {
-  const [currentPath, setCurrentPath] = useState(window.location.pathname);
-
-  useEffect(() => {
-    const handlePopState = () => {
-      setCurrentPath(window.location.pathname);
-    };
-
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
-
-  // Simple routing logic
-  if (currentPath.startsWith('/admin')) {
-    return <AdminApp />;
-  }
-
-  // Default to patient chat interface
+function ChatRouteWrapper() {
+  const { slug } = useParams();
   return (
-    <ProgressProvider>
-      <AppContent />
-    </ProgressProvider>
+    <HospitalProvider slug={slug!}>
+      <HospitalGuard>
+        <ProgressProvider>
+          <AppContent slug={slug} />
+        </ProgressProvider>
+      </HospitalGuard>
+    </HospitalProvider>
+  );
+}
+
+function AdminRouteWrapper() {
+  const { slug } = useParams();
+  return (
+    <HospitalProvider slug={slug!}>
+      <HospitalGuard>
+        <AdminApp slug={slug} />
+      </HospitalGuard>
+    </HospitalProvider>
+  );
+}
+// Guard component to redirect if hospital is invalid
+function HospitalGuard({ children }: { children: React.ReactNode }) {
+  const { hospital, loading } = useHospital();
+  const location = useLocation();
+  
+  console.log(`[HospitalGuard] Loading: ${loading}, Hospital:`, hospital);
+  console.log(`[HospitalGuard] Current location:`, location.pathname);
+  
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
+        <p className="mt-4 text-gray-600">Loading hospital...</p>
+      </div>
+    );
+  }
+  if (!hospital) {
+    console.log(`[HospitalGuard] Hospital not found, showing error page`);
+    // Show error instead of redirecting to demo1
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <h1 className="text-2xl font-bold text-red-600 mb-4">Hospital Not Found</h1>
+          <p className="text-gray-600 mb-4">The hospital you're looking for doesn't exist or is not available.</p>
+          <button 
+            onClick={() => window.location.href = '/h/demo1'} 
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700"
+          >
+            Go to Demo Hospital
+          </button>
+        </div>
+      </div>
+    );
+  }
+  console.log(`[HospitalGuard] Hospital found, rendering children`);
+  return <>{children}</>;
+}
+
+function App() {
+  return (
+    <Router>
+      <Routes>
+        <Route path="/h/:slug" element={<ChatRouteWrapper />} />
+        <Route path="/h/:slug/admin" element={<AdminRouteWrapper />} />
+        {/* Fallback: redirect to /h/demo1 or show 404 */}
+        <Route path="*" element={<Navigate to="/h/demo1" replace />} />
+      </Routes>
+    </Router>
   );
 }
 

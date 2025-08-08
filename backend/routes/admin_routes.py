@@ -1,21 +1,10 @@
-"""
-Admin Panel API Routes
-FastAPI routes for admin panel functionality
-"""
-
 from fastapi import APIRouter, Depends, HTTPException, Request, Query, UploadFile, File
 from sqlalchemy.orm import Session
-from typing import List, Optional
-import logging
-import csv
-import io
-from datetime import datetime
-
-from core.database import get_db
-from core.models import AdminUser, Hospital, Role, UserRole, Permission, AuditLog, Doctor, Patient, Appointment, Department
-from services.auth_service import AuthService, get_current_user, require_permission
-from services.doctor_service import DoctorService
-from schemas.admin_models import (
+from backend.core.database import get_db
+from backend.core.models import AdminUser, Hospital, Role, UserRole, Permission, AuditLog, Doctor, Patient, Appointment, Department
+from backend.services.auth_service import AuthService, get_current_user, require_permission
+from backend.services.doctor_service import DoctorService
+from backend.schemas.admin_models import (
     LoginRequest, TokenResponse, RefreshTokenRequest,
     AdminUserCreate, AdminUserUpdate, AdminUserResponse,
     HospitalCreate, HospitalUpdate, HospitalResponse,
@@ -29,11 +18,27 @@ from schemas.admin_models import (
     EmailInvitationRequest, EmailInvitationResponse
 )
 
-# Set up logging
+import logging
+import csv
+import io
+from datetime import datetime
+from typing import List, Optional
+
 logger = logging.getLogger(__name__)
 
-# Create router
 router = APIRouter(prefix="/admin", tags=["Admin Panel"])
+
+@router.get("/hospitals/by-slug/{slug}")
+def get_hospital_by_slug(slug: str, db: Session = Depends(get_db)):
+    hospital = db.query(Hospital).filter_by(slug=slug).first()
+    if not hospital:
+        raise HTTPException(status_code=404, detail="Hospital not found")
+    return {"id": hospital.id, "slug": hospital.slug, "name": hospital.name}
+
+"""Admin Panel API Routes
+FastAPI routes for admin panel functionality
+"""
+
 
 # ============================================================================
 # AUTHENTICATION ROUTES
@@ -83,38 +88,9 @@ async def logout(
     try:
         # Log the logout action
         AuthService._log_action(db, current_user, "user.logout", "user", str(current_user.id), {})
-        
-        logger.info(f"Admin logout: {current_user.username}")
-        return SuccessResponse(message="Logged out successfully")
-        
+        return SuccessResponse(message="Logout successful")
     except Exception as e:
         logger.error(f"Admin logout failed: {str(e)}")
-        raise
-
-@router.get("/me", response_model=AdminUserResponse)
-async def get_current_admin_user(
-    current_user: AdminUser = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Get current admin user profile"""
-    try:
-        return AdminUserResponse(
-            id=current_user.id,
-            username=current_user.username,
-            email=current_user.email,
-            first_name=current_user.first_name,
-            last_name=current_user.last_name,
-            hospital_id=current_user.hospital_id,
-            is_active=current_user.is_active,
-            is_super_admin=current_user.is_super_admin,
-            last_login=current_user.last_login,
-            two_factor_enabled=getattr(current_user, 'two_factor_enabled', False),
-            created_at=current_user.created_at,
-            updated_at=current_user.updated_at,
-            roles=[]  # TODO: Implement role loading
-        )
-    except Exception as e:
-        logger.error(f"Get current user failed: {str(e)}")
         raise
 
 # ============================================================================
@@ -177,33 +153,21 @@ async def get_admin_users(
     """Get paginated list of admin users"""
     try:
         query = db.query(AdminUser)
-        
-        # Filter by hospital if not super admin
+        # Enforce tenant isolation unless superadmin
         if not current_user.is_super_admin:
             query = query.filter(AdminUser.hospital_id == current_user.hospital_id)
-        
-        # Apply search filter
+        # Apply search
         if search:
-            query = query.filter(
-                (AdminUser.username.contains(search)) |
-                (AdminUser.email.contains(search)) |
-                (AdminUser.first_name.contains(search)) |
-                (AdminUser.last_name.contains(search))
-            )
-        
+            query = query.filter(AdminUser.username.ilike(f"%{search}%"))
         # Get total count
         total = query.count()
-        
         # Apply pagination
         users = query.offset((page - 1) * size).limit(size).all()
-        
         # Convert to response models
         user_responses = []
         for user in users:
-            # Get user roles and permissions
             roles = []
             permissions = []
-            
             user_roles = db.query(UserRole).filter_by(admin_user_id=user.id).all()
             for user_role in user_roles:
                 role = db.query(Role).filter_by(id=user_role.role_id).first()
@@ -213,7 +177,6 @@ async def get_admin_users(
                         "name": role.name,
                         "display_name": role.display_name
                     })
-                    # Add role permissions
                     if role.permissions:
                         import json
                         try:
@@ -221,7 +184,6 @@ async def get_admin_users(
                             permissions.extend(role_permissions)
                         except json.JSONDecodeError:
                             pass
-            
             user_response = AdminUserResponse(
                 id=user.id,
                 username=user.username,
@@ -229,7 +191,7 @@ async def get_admin_users(
                 first_name=user.first_name,
                 last_name=user.last_name,
                 phone=user.phone,
-                hospital_id=user.hospital_id,
+                hospital_id=user.hospital_id if user.hospital_id is not None else 0,
                 is_super_admin=user.is_super_admin,
                 is_active=user.is_active,
                 last_login=user.last_login,
@@ -237,10 +199,9 @@ async def get_admin_users(
                 created_at=user.created_at,
                 updated_at=user.updated_at,
                 roles=roles,
-                permissions=list(set(permissions))  # Remove duplicates
+                permissions=list(set(permissions))
             )
             user_responses.append(user_response)
-        
         return PaginatedResponse(
             items=user_responses,
             total=total,
@@ -250,7 +211,6 @@ async def get_admin_users(
             has_next=page * size < total,
             has_prev=page > 1
         )
-        
     except Exception as e:
         logger.error(f"Get admin users failed: {str(e)}")
         raise
@@ -263,12 +223,12 @@ async def create_admin_user(
 ):
     """Create a new admin user"""
     try:
-        # Check if user can create users for this hospital
-        if not current_user.is_super_admin and user_data.hospital_id != current_user.hospital_id:
-            raise HTTPException(status_code=403, detail="Cannot create users for other hospitals")
-        
+        # Always enforce hospital_id for non-superadmins
+        if not current_user.is_super_admin:
+            user_data.hospital_id = current_user.hospital_id
         user = AuthService.create_admin_user(db, user_data, current_user)
-        
+        # Audit log
+        AuthService._log_action(db, current_user, "admin_user.create", "admin_user", str(user.id), {"created_username": user.username})
         # Convert to response model
         user_response = AdminUserResponse(
             id=user.id,
@@ -287,10 +247,8 @@ async def create_admin_user(
             roles=[],
             permissions=[]
         )
-        
         logger.info(f"Admin user created: {user.username} by {current_user.username}")
         return user_response
-        
     except Exception as e:
         logger.error(f"Create admin user failed: {str(e)}")
         raise
@@ -374,7 +332,8 @@ async def update_admin_user(
             raise HTTPException(status_code=403, detail="Cannot update users from other hospitals")
         
         updated_user = AuthService.update_admin_user(db, user_id, user_data, current_user)
-        
+        # Audit log
+        AuthService._log_action(db, current_user, "admin_user.update", "admin_user", str(user_id), {"updated_username": updated_user.username})
         # Convert to response model
         user_response = AdminUserResponse(
             id=updated_user.id,
@@ -413,22 +372,15 @@ async def get_hospitals(
     """Get list of hospitals"""
     try:
         query = db.query(Hospital)
-        
-        # Filter by hospital if not super admin
+        # If not superadmin, only show current user's hospital
         if not current_user.is_super_admin:
             query = query.filter(Hospital.id == current_user.hospital_id)
-        
         hospitals = query.all()
-        
-        # Convert to response models
         hospital_responses = []
         for hospital in hospitals:
-            # Get counts
             admin_users_count = db.query(AdminUser).filter_by(hospital_id=hospital.id).count()
             doctors_count = db.query(Doctor).filter_by(hospital_id=hospital.id).count()
             patients_count = db.query(Patient).filter_by(hospital_id=hospital.id).count()
-            
-            # Parse features_enabled
             features_enabled = []
             if hospital.features_enabled:
                 import json
@@ -436,10 +388,9 @@ async def get_hospitals(
                     features_enabled = json.loads(hospital.features_enabled)
                 except json.JSONDecodeError:
                     pass
-            
             hospital_response = HospitalResponse(
                 id=hospital.id,
-                hospital_id=hospital.hospital_id,
+                hospital_id=str(hospital.hospital_id) if hasattr(hospital, 'hospital_id') and hospital.hospital_id is not None else str(hospital.id),
                 name=hospital.name,
                 display_name=hospital.display_name,
                 address=hospital.address,
@@ -460,9 +411,7 @@ async def get_hospitals(
                 patients_count=patients_count
             )
             hospital_responses.append(hospital_response)
-        
         return hospital_responses
-        
     except Exception as e:
         logger.error(f"Get hospitals failed: {str(e)}")
         raise
@@ -719,23 +668,35 @@ async def get_doctors(
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
     search: Optional[str] = Query(None),
+    hospital_id: Optional[int] = Query(None, description="Filter by hospital ID (superadmin only)"),
+    slug: Optional[str] = Query(None, description="Hospital slug for tenant isolation"),
     current_user: AdminUser = Depends(require_permission("doctor:read")),
     db: Session = Depends(get_db)
 ):
-    """Get all doctors for the current hospital"""
+    """Get all doctors for the current hospital or all hospitals (superadmin)"""
     try:
         skip = (page - 1) * size
+        # Determine hospital_id from slug if provided
+        resolved_hospital_id = None
+        if slug:
+            hospital = db.query(Hospital).filter_by(slug=slug).first()
+            if not hospital:
+                raise HTTPException(status_code=404, detail="Hospital not found for slug")
+            resolved_hospital_id = hospital.id
+        elif hospital_id is not None:
+            resolved_hospital_id = hospital_id
+        elif not current_user.is_super_admin:
+            resolved_hospital_id = current_user.hospital_id
+        # Superadmin can see all if no hospital_id/slug
         doctors = DoctorService.get_doctors(
-            db, current_user.hospital_id, skip=skip, limit=size, search=search
+            db, resolved_hospital_id, skip=skip, limit=size, search=search, is_super_admin=current_user.is_super_admin
         )
-        
-        # Convert to response format
         doctor_responses = []
         for doctor in doctors:
             doctor_responses.append(DoctorResponse(
                 id=doctor.id,
                 name=doctor.name,
-                email=doctor.email or "",
+                email="",  # No email field in Doctor model
                 phone=doctor.phone_number,
                 specialization=doctor.profile or "",
                 department="General",  # TODO: Get from department relationship
@@ -748,13 +709,11 @@ async def get_doctors(
                 medical_license=None,
                 is_active=True,
                 calendar_connected=bool(doctor.google_access_token),
-                google_calendar_id=doctor.email,
+                google_calendar_id=doctor.phone_number,  # Use phone_number as fallback
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow()
             ))
-        
         return doctor_responses
-        
     except Exception as e:
         logger.error(f"Get doctors failed: {str(e)}")
         raise
@@ -898,4 +857,4 @@ async def send_doctor_invitations(
         
     except Exception as e:
         logger.error(f"Send doctor invitations failed: {str(e)}")
-        raise 
+        raise
