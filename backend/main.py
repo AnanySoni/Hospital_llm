@@ -101,6 +101,33 @@ async def root():
     }
 
 
+@app.get("/hospitals/by-slug/{slug}")
+async def get_hospital_by_slug(
+    slug: str,
+    db: Session = Depends(get_db)
+):
+    """
+    Public endpoint to check if a hospital exists by slug.
+    Returns basic hospital information without requiring authentication.
+    """
+    try:
+        hospital = db.query(Hospital).filter(Hospital.slug == slug).first()
+        if not hospital:
+            raise HTTPException(status_code=404, detail="Hospital not found")
+        
+        return {
+            "id": hospital.id,
+            "slug": hospital.slug,
+            "name": hospital.name,
+            "status": hospital.status
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching hospital by slug {slug}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
 @app.post("/recommend-doctors", response_model=list[DoctorRecommendation])
 async def recommend_doctors(
     request: SymptomsRequest,
