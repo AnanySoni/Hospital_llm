@@ -56,7 +56,11 @@ GOOGLE_SIGNIN_SCOPES = [
 # For now we only support local/dev callback; production URLs can be added later
 # IMPORTANT: Redirect to FRONTEND so React can handle the callback UI.
 # Google must be configured with this URI in the OAuth client.
-GOOGLE_SIGNIN_REDIRECT_URI = "http://localhost:3000/onboarding/google/callback"
+# Use environment variable for production, fallback to localhost for development
+GOOGLE_SIGNIN_REDIRECT_URI = os.getenv(
+    "GOOGLE_SIGNIN_REDIRECT_URI",
+    "http://139.59.66.99:3000/onboarding/google/callback"
+)
 
 
 def _create_google_signin_flow(state: Optional[str] = None) -> Flow:
