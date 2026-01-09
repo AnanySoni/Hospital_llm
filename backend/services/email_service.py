@@ -26,6 +26,7 @@ class EmailService:
     SMTP_PORT = 587
     EMAIL_ADDRESS = os.getenv("EMAIL_ADDRESS", "hospital.admin@example.com")
     EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "your_app_password")
+    FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
     
     @staticmethod
     def send_doctor_invitation(doctor: Doctor, hospital: Hospital, admin_user: AdminUser, custom_message: str = None) -> bool:
@@ -107,6 +108,31 @@ class EmailService:
             return False
     
     @staticmethod
+    def send_verification_email(admin_user: AdminUser, token: str) -> bool:
+        """Send email verification email to admin user"""
+        try:
+            msg = MIMEMultipart()
+            msg['From'] = EmailService.EMAIL_ADDRESS
+            msg['To'] = admin_user.email
+            msg['Subject'] = "Verify your email - Hospital AI Platform"
+            
+            body = EmailService._create_verification_email_body(admin_user, token)
+            msg.attach(MIMEText(body, 'html'))
+            
+            success = EmailService._send_email(msg)
+            
+            if success:
+                logger.info(f"Verification email sent successfully to {admin_user.email}")
+            else:
+                logger.error(f"Failed to send verification email to {admin_user.email}")
+                
+            return success
+            
+        except Exception as e:
+            logger.error(f"Error sending verification email to {admin_user.email}: {str(e)}")
+            return False
+    
+    @staticmethod
     def send_welcome_email(doctor: Doctor, hospital: Hospital, login_credentials: Dict[str, str]) -> bool:
         """Send welcome email with login credentials"""
         try:
@@ -122,6 +148,56 @@ class EmailService:
             
         except Exception as e:
             logger.error(f"Error sending welcome email to {doctor.email}: {str(e)}")
+            return False
+    
+    @staticmethod
+    def send_admin_welcome_email(admin_user: AdminUser, onboarding_session_id: Optional[int] = None) -> bool:
+        """Send welcome email to admin user after email verification"""
+        try:
+            msg = MIMEMultipart()
+            msg['From'] = EmailService.EMAIL_ADDRESS
+            msg['To'] = admin_user.email
+            msg['Subject'] = "Welcome to Hospital AI Platform - Your Account is Verified"
+            
+            body = EmailService._create_admin_welcome_body(admin_user, admin_user.username, onboarding_session_id)
+            msg.attach(MIMEText(body, 'html'))
+            
+            success = EmailService._send_email(msg)
+            
+            if success:
+                logger.info(f"Welcome email sent successfully to {admin_user.email}")
+            else:
+                logger.error(f"Failed to send welcome email to {admin_user.email}")
+                
+            return success
+            
+        except Exception as e:
+            logger.error(f"Error sending welcome email to {admin_user.email}: {str(e)}")
+            return False
+    
+    @staticmethod
+    def send_password_reset_email(admin_user: AdminUser, token: str) -> bool:
+        """Send password reset email to admin user"""
+        try:
+            msg = MIMEMultipart()
+            msg['From'] = EmailService.EMAIL_ADDRESS
+            msg['To'] = admin_user.email
+            msg['Subject'] = "Reset Your Password - Hospital AI Platform"
+            
+            body = EmailService._create_password_reset_body(admin_user, token)
+            msg.attach(MIMEText(body, 'html'))
+            
+            success = EmailService._send_email(msg)
+            
+            if success:
+                logger.info(f"Password reset email sent successfully to {admin_user.email}")
+            else:
+                logger.error(f"Failed to send password reset email to {admin_user.email}")
+                
+            return success
+            
+        except Exception as e:
+            logger.error(f"Error sending password reset email to {admin_user.email}: {str(e)}")
             return False
     
     @staticmethod
@@ -255,6 +331,64 @@ class EmailService:
         """
     
     @staticmethod
+    def _create_verification_email_body(admin_user: AdminUser, token: str) -> str:
+        """Create HTML body for email verification email"""
+        verification_url = f"{EmailService.FRONTEND_URL}/onboarding/verify-email?token={token}"
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+                .header {{ background-color: #2563eb; color: white; padding: 20px; text-align: center; }}
+                .content {{ padding: 20px; background-color: #f8f9fa; }}
+                .button {{ background-color: #2563eb; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block; margin: 20px 0; }}
+                .footer {{ text-align: center; padding: 20px; color: #666; font-size: 12px; }}
+                .warning {{ background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 12px; margin: 20px 0; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>Hospital AI Platform</h1>
+                    <p>Email Verification</p>
+                </div>
+                
+                <div class="content">
+                    <h2>Hello,</h2>
+                    
+                    <p>Thank you for signing up for the Hospital AI Platform! Please verify your email address to complete your registration.</p>
+                    
+                    <p>Click the button below to verify your email:</p>
+                    
+                    <div style="text-align: center;">
+                        <a href="{verification_url}" class="button">Verify Email Address</a>
+                    </div>
+                    
+                    <p>Or copy and paste this link into your browser:</p>
+                    <p style="word-break: break-all; color: #2563eb;">{verification_url}</p>
+                    
+                    <div class="warning">
+                        <p><strong>⚠️ Important:</strong> This verification link will expire in 24 hours. Please verify your email as soon as possible.</p>
+                    </div>
+                    
+                    <p>If you did not create an account with us, please ignore this email.</p>
+                    
+                    <p>Best regards,<br>
+                    The Hospital AI Platform Team</p>
+                </div>
+                
+                <div class="footer">
+                    <p>This email was sent from Hospital AI Platform</p>
+                    <p>If you need assistance, please contact our support team.</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+    
+    @staticmethod
     def _create_welcome_body(doctor: Doctor, hospital: Hospital, login_credentials: Dict[str, str]) -> str:
         """Create HTML body for welcome email"""
         return f"""
@@ -310,6 +444,159 @@ class EmailService:
                 <div class="footer">
                     <p>This email was sent from {hospital.display_name} Hospital AI Assistant Platform</p>
                     <p>Please keep your login credentials secure and do not share them with anyone.</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+    
+    @staticmethod
+    def _create_admin_welcome_body(admin_user: AdminUser, username: str, onboarding_session_id: Optional[int] = None) -> str:
+        """Create HTML body for admin welcome email"""
+        company_name = admin_user.company_name or "your organization"
+        onboarding_url = f"{EmailService.FRONTEND_URL}/onboarding/hospital-info"
+        
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+                .header {{ background-color: #10b981; color: white; padding: 20px; text-align: center; }}
+                .content {{ padding: 20px; background-color: #f8f9fa; }}
+                .button {{ background-color: #10b981; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block; margin: 20px 0; }}
+                .footer {{ text-align: center; padding: 20px; color: #666; font-size: 12px; }}
+                .steps {{ background-color: #e0f2fe; padding: 15px; border-radius: 5px; margin: 20px 0; }}
+                .steps ol {{ margin: 10px 0; padding-left: 20px; }}
+                .steps li {{ margin: 8px 0; }}
+                .credentials {{ background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0; border-radius: 5px; }}
+                .credentials h3 {{ margin-top: 0; color: #856404; }}
+                .credentials code {{ background-color: #f8f9fa; padding: 4px 8px; border-radius: 3px; font-family: monospace; }}
+                .credentials p {{ margin: 10px 0; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>Welcome to Hospital AI Platform!</h1>
+                    <p>Your email has been verified</p>
+                </div>
+                
+                <div class="content">
+                    <h2>Hello,</h2>
+                    
+                    <p>Congratulations! Your email address has been successfully verified, and your account is now active.</p>
+                    
+                    <p>Welcome to <strong>{company_name}</strong> on the Hospital AI Platform. You're now ready to set up your hospital and start using our AI-powered healthcare assistant.</p>
+                    
+                    <div class="credentials">
+                        <h3>🔐 Your Login Credentials</h3>
+                        <p><strong>Username:</strong> <code>{username}</code></p>
+                        <p><strong>Password:</strong> The password you set during registration</p>
+                        <p style="color: #856404;"><strong>⚠️ Important:</strong> Please save these credentials for future logins. You'll need them to access your admin panel after completing hospital setup.</p>
+                        <p>After you complete hospital setup, you can log in at: <code>https://yourdomain.com/h/your-hospital-slug/admin</code></p>
+                    </div>
+                    
+                    <div class="steps">
+                        <h3>Next Steps:</h3>
+                        <ol>
+                            <li><strong>Complete Hospital Information</strong> - Add your hospital details and choose your unique URL</li>
+                            <li><strong>Set Up Departments</strong> - Organize your hospital structure (in Admin Panel)</li>
+                            <li><strong>Add Doctors</strong> - Invite your medical staff via CSV upload or manual entry (in Admin Panel)</li>
+                            <li><strong>Launch Your AI Assistant</strong> - Start helping patients with AI-powered consultations</li>
+                        </ol>
+                    </div>
+                    
+                    <p>Click the button below to continue with your onboarding:</p>
+                    
+                    <div style="text-align: center;">
+                        <a href="{onboarding_url}" class="button">Continue Onboarding</a>
+                    </div>
+                    
+                    <p>Our platform provides:</p>
+                    <ul>
+                        <li>AI-powered patient consultation assistance</li>
+                        <li>Automated appointment scheduling</li>
+                        <li>Patient history and analytics</li>
+                        <li>Secure communication tools</li>
+                        <li>Multi-tenant hospital management</li>
+                    </ul>
+                    
+                    <p>If you have any questions or need assistance, please don't hesitate to contact our support team.</p>
+                    
+                    <p>Best regards,<br>
+                    The Hospital AI Platform Team</p>
+                </div>
+                
+                <div class="footer">
+                    <p>This email was sent from Hospital AI Platform</p>
+                    <p>If you need assistance, please contact our support team.</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+    
+    @staticmethod
+    def _create_password_reset_body(admin_user: AdminUser, token: str) -> str:
+        """Create HTML body for password reset email"""
+        reset_url = f"{EmailService.FRONTEND_URL}/onboarding/reset-password?token={token}"
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+                .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
+                .header {{ background-color: #dc2626; color: white; padding: 20px; text-align: center; }}
+                .content {{ padding: 20px; background-color: #f8f9fa; }}
+                .button {{ background-color: #dc2626; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block; margin: 20px 0; }}
+                .footer {{ text-align: center; padding: 20px; color: #666; font-size: 12px; }}
+                .warning {{ background-color: #fee2e2; border-left: 4px solid #dc2626; padding: 12px; margin: 20px 0; }}
+                .security {{ background-color: #fef3c7; border-left: 4px solid #f59e0b; padding: 12px; margin: 20px 0; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>Hospital AI Platform</h1>
+                    <p>Password Reset Request</p>
+                </div>
+                
+                <div class="content">
+                    <h2>Hello,</h2>
+                    
+                    <p>We received a request to reset your password for your Hospital AI Platform account.</p>
+                    
+                    <p>Click the button below to reset your password:</p>
+                    
+                    <div style="text-align: center;">
+                        <a href="{reset_url}" class="button">Reset Password</a>
+                    </div>
+                    
+                    <p>Or copy and paste this link into your browser:</p>
+                    <p style="word-break: break-all; color: #dc2626;">{reset_url}</p>
+                    
+                    <div class="warning">
+                        <p><strong>⚠️ Important:</strong> This password reset link will expire in 1 hour. Please reset your password as soon as possible.</p>
+                    </div>
+                    
+                    <div class="security">
+                        <p><strong>🔒 Security Notice:</strong> If you did not request a password reset, please ignore this email. Your password will remain unchanged.</p>
+                    </div>
+                    
+                    <p>For security reasons, this link can only be used once. If you need to reset your password again, please request a new reset link.</p>
+                    
+                    <p>If you continue to have issues, please contact our support team.</p>
+                    
+                    <p>Best regards,<br>
+                    The Hospital AI Platform Team</p>
+                </div>
+                
+                <div class="footer">
+                    <p>This email was sent from Hospital AI Platform</p>
+                    <p>If you need assistance, please contact our support team.</p>
                 </div>
             </div>
         </body>

@@ -3,16 +3,17 @@ Hospital Appointment System - Main Application
 Optimized FastAPI application with proper structure and organization
 """
 
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import FastAPI, Depends, HTTPException, Request, Query
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 import logging
 import json
+from typing import Optional
 
 # Import from organized structure
 from backend.core.database import get_db
-from backend.core.models import Doctor, DoctorAvailability, Department
+from backend.core.models import Doctor, DoctorAvailability, Department, Hospital
 from backend.utils.llm_utils import (
     get_doctor_recommendations,
     get_doctor_recommendations_with_history, start_diagnostic_session_with_history
@@ -22,7 +23,7 @@ from backend.services.test_service import TestService
 from backend.services.session_service import SessionService
 from backend.services.patient_recognition_service import PatientRecognitionService
 from backend.middleware import setup_error_handlers
-from backend.middleware.tenant_middleware import setup_tenant_context, get_db
+from backend.middleware.tenant_middleware import setup_tenant_context, get_db, optional_tenant_context
 from backend.schemas import (
     SymptomsRequest, AppointmentRequest, RescheduleRequest,
     AppointmentResponse, RescheduleResponse, CancelResponse, DoctorRecommendation,
@@ -31,6 +32,7 @@ from backend.schemas import (
     PhoneRecognitionRequest, SmartWelcomeRequest, PatientProfileResponse, SmartWelcomeResponse
 )
 from backend.integrations import google_calendar_router
+from backend.routes.onboarding_routes import router as onboarding_router
 
 # Import adaptive routes
 from backend.routes.adaptive_routes import router as adaptive_router
@@ -84,6 +86,9 @@ app.include_router(adaptive_router)
 # Include admin routes
 app.include_router(admin_router)
 
+# Include onboarding routes (self-service hospital onboarding)
+app.include_router(onboarding_router)
+
 
 @app.get("/")
 async def root():
@@ -97,13 +102,56 @@ async def root():
 
 
 @app.post("/recommend-doctors", response_model=list[DoctorRecommendation])
-async def recommend_doctors(request: SymptomsRequest, db: Session = Depends(get_db)):
+async def recommend_doctors(
+    request: SymptomsRequest,
+    slug: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    hospital_id: Optional[int] = Depends(optional_tenant_context()),
+):
     """Get doctor recommendations based on symptoms"""
     try:
-        logger.info(f"Getting doctor recommendations for symptoms: {request.symptoms}")
+        # Resolve hospital_id from slug first, then fall back to tenant context
+        resolved_hospital_id = hospital_id
+        if slug:
+            hospital = db.query(Hospital).filter(Hospital.slug == slug).first()
+            if hospital:
+                resolved_hospital_id = hospital.id
+
+        logger.info(
+            f"Getting doctor recommendations for symptoms: {request.symptoms}, "
+            f"hospital_id={resolved_hospital_id}, slug={slug}"
+        )
         
-        # Get all doctors
-        doctors = db.query(Doctor).all()
+        # Get doctors scoped to current hospital
+        # If slug is provided, we MUST filter by hospital (even if it means empty list)
+        query = db.query(Doctor)
+        if slug:
+            # Slug was provided - enforce strict isolation
+            if resolved_hospital_id:
+                query = query.filter(Doctor.hospital_id == resolved_hospital_id)
+                doctors = query.all()
+            else:
+                # Slug provided but hospital not found - return empty list
+                logger.warning(f"Slug '{slug}' provided but hospital not found - returning empty doctor list")
+                return []
+        elif resolved_hospital_id:
+            # No slug, but hospital_id from context
+            query = query.filter(Doctor.hospital_id == resolved_hospital_id)
+            doctors = query.all()
+        else:
+            # No slug, no hospital_id - return empty list for security
+            logger.warning("No slug or hospital_id provided - returning empty doctor list for security")
+            return []
+        
+        # If no doctors exist for this hospital, return an empty list instead of
+        # falling back to any global or LLM-provided defaults. This guarantees
+        # strict tenant isolation at the application layer.
+        if not doctors:
+            logger.info(
+                f"No doctors found for hospital_id={resolved_hospital_id}, slug={slug} - "
+                "returning empty recommendations list"
+            )
+            return []
         
         # Convert to format expected by LLM
         doctor_list = []
@@ -113,12 +161,15 @@ async def recommend_doctors(request: SymptomsRequest, db: Session = Depends(get_
                 "name": doctor.name,
                 "department": doctor.department.name if doctor.department else "",
                 "subdivision": doctor.subdivision.name if doctor.subdivision else "",
-                "tags": doctor.tags if doctor.tags else []
+                "tags": doctor.tags if doctor.tags else [],
+                "hospital_id": doctor.hospital_id,
             }
             doctor_list.append(doctor_dict)
         
-        # Get recommendations from LLM
-        recommendations = await get_doctor_recommendations(request.symptoms, doctor_list)
+        # Get recommendations from LLM (with optional hospital filter)
+        recommendations = await get_doctor_recommendations(
+            request.symptoms, doctor_list, hospital_id=resolved_hospital_id
+        )
         
         # Parse recommendations
         import json
@@ -220,10 +271,25 @@ async def cancel_appointment(slug: str, appointment_id: int, db: Session = Depen
 
 
 @app.get("/doctors")
-def get_all_doctors(db: Session = Depends(get_db)):
-    """Get all doctors for calendar connection dropdown"""
+def get_all_doctors(
+    slug: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    hospital_id: Optional[int] = Depends(optional_tenant_context()),
+):
+    """Get doctors for calendar connection dropdown, scoped to current hospital if available."""
     try:
-        doctors = db.query(Doctor).all()
+        # Resolve hospital_id from slug if not provided via tenant context
+        resolved_hospital_id = hospital_id
+        if slug and not resolved_hospital_id:
+            hospital = db.query(Hospital).filter(Hospital.slug == slug).first()
+            if hospital:
+                resolved_hospital_id = hospital.id
+
+        query = db.query(Doctor)
+        if resolved_hospital_id:
+            query = query.filter(Doctor.hospital_id == resolved_hospital_id)
+
+        doctors = query.all()
         doctor_list = []
         for doctor in doctors:
             doctor_list.append({
@@ -231,10 +297,11 @@ def get_all_doctors(db: Session = Depends(get_db)):
                 "name": doctor.name,
                 "department": doctor.department.name if doctor.department else "",
                 "subdivision": doctor.subdivision.name if doctor.subdivision else "",
-                "has_calendar_connected": bool(doctor.google_access_token)
+                "has_calendar_connected": bool(doctor.google_access_token),
+                "hospital_id": doctor.hospital_id,
             })
         
-        logger.info(f"Returning {len(doctor_list)} doctors")
+        logger.info(f"Returning {len(doctor_list)} doctors for hospital_id={resolved_hospital_id}")
         return doctor_list
         
     except Exception as e:
@@ -243,18 +310,33 @@ def get_all_doctors(db: Session = Depends(get_db)):
 
 
 @app.get("/departments")
-def get_all_departments(db: Session = Depends(get_db)):
-    """Get all departments"""
+def get_all_departments(
+    slug: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    hospital_id: Optional[int] = Depends(optional_tenant_context()),
+):
+    """Get departments scoped to current hospital if available."""
     try:
-        departments = db.query(Department).all()
+        resolved_hospital_id = hospital_id
+        if slug and not resolved_hospital_id:
+            hospital = db.query(Hospital).filter(Hospital.slug == slug).first()
+            if hospital:
+                resolved_hospital_id = hospital.id
+
+        query = db.query(Department)
+        if resolved_hospital_id:
+            query = query.filter(Department.hospital_id == resolved_hospital_id)
+
+        departments = query.all()
         department_list = []
         for dept in departments:
             department_list.append({
                 "id": dept.id,
-                "name": dept.name
+                "name": dept.name,
+                "hospital_id": dept.hospital_id,
             })
         
-        logger.info(f"Returning {len(department_list)} departments")
+        logger.info(f"Returning {len(department_list)} departments for hospital_id={resolved_hospital_id}")
         return department_list
         
     except Exception as e:
@@ -338,49 +420,85 @@ async def book_medical_test(request: dict):
 
 @app.get("/h/{slug}/doctors/{doctor_id}/available-slots")
 async def get_available_slots(slug: str, doctor_id: int, date: str, db: Session = Depends(get_db)):
-    """Get available time slots for a doctor on a specific date with hospital slug"""
+    """Get available time slots for a doctor on a specific date with hospital slug.
+
+    If no slots exist for the requested date, automatically generate slots for the
+    next 30 days (skipping weekends) to ensure booking can proceed.
+    """
     try:
-        from datetime import datetime
-        
+        from datetime import datetime, date as date_type, timedelta
+        from backend.services.appointment_service import generate_slots_for_date_range
+
         logger.info(f"Getting slots for doctor {doctor_id} on date {date} in hospital {slug}")
-        
+
         # Parse the date
         appointment_date = datetime.strptime(date, "%Y-%m-%d").date()
         logger.info(f"Parsed date: {appointment_date}")
-        
-        # Get available slots from the database
+
+        # Ensure hospital and doctor belong together
+        hospital = db.query(Hospital).filter(Hospital.slug == slug).first()
+        if not hospital:
+            raise HTTPException(status_code=404, detail="Hospital not found")
+
+        doctor = db.query(Doctor).filter(
+            Doctor.id == doctor_id,
+            Doctor.hospital_id == hospital.id,
+        ).first()
+        if not doctor:
+            raise HTTPException(status_code=404, detail="Doctor not found")
+
+        # Check if any slots exist for this date
+        existing_slots_count = db.query(DoctorAvailability).filter(
+            DoctorAvailability.doctor_id == doctor_id,
+            DoctorAvailability.date == appointment_date,
+        ).count()
+
+        # If no slots exist, generate for the next 30 days (including today)
+        if existing_slots_count == 0:
+            logger.info(f"No slots found for doctor {doctor_id} on {appointment_date}. Generating slots...")
+            today = date_type.today()
+            end_date = today + timedelta(days=30)
+            created = generate_slots_for_date_range(db, doctor_id, today, end_date)
+            logger.info(f"Generated {created} slots for doctor {doctor_id}")
+
+        # Get available slots from the database for the requested date
         query = db.query(DoctorAvailability).filter(
             DoctorAvailability.doctor_id == doctor_id,
             DoctorAvailability.date == appointment_date,
-            DoctorAvailability.is_booked == False
+            DoctorAvailability.is_booked == False,
         )
-        
+
         logger.info(f"SQL Query: {query.statement}")
         available_slots = query.all()
         logger.info(f"Found {len(available_slots)} available slots")
-        
+
         # Convert to 12-hour format for display
-        def convert_to_12hour(time_24):
+        def convert_to_12hour(time_24: str) -> str:
             try:
                 # Extract start time from range (e.g., "09:00" from "09:00-09:30")
-                start_time = time_24.split('-')[0]
+                start_time = time_24.split("-")[0]
                 time_obj = datetime.strptime(start_time, "%H:%M").time()
                 return time_obj.strftime("%I:%M %p")
-            except:
+            except Exception:
                 return time_24
-        
+
         slots = []
         for slot in available_slots:
-            slots.append({
-                "id": slot.id,
-                "time_24": slot.time_slot,
-                "time_12": convert_to_12hour(slot.time_slot),
-                "is_available": not slot.is_booked
-            })
-        
+            slots.append(
+                {
+                    "id": slot.id,
+                    "time_24": slot.time_slot,
+                    "time_12": convert_to_12hour(slot.time_slot),
+                    "is_available": not slot.is_booked,
+                }
+            )
+
         logger.info(f"Returning {len(slots)} available slots for doctor {doctor_id} on {date}")
         return slots
-        
+
+    except HTTPException:
+        # Re-raise HTTPExceptions unchanged
+        raise
     except Exception as e:
         logger.error(f"Error getting available slots: {str(e)}")
         raise HTTPException(status_code=500, detail="An error occurred while retrieving available slots")
@@ -418,12 +536,26 @@ async def health_check():
 
 
 @app.get("/calendar-setup")
-async def calendar_setup_page(db: Session = Depends(get_db)):
-    """Simple page to help set up Google Calendar integration"""
+async def calendar_setup_page(
+    slug: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    hospital_id: Optional[int] = Depends(optional_tenant_context()),
+):
+    """Simple page to help set up Google Calendar integration (scoped by hospital when available)."""
     from fastapi.responses import HTMLResponse
     
-    # Get all doctors with their calendar status
-    doctors = db.query(Doctor).all()
+    # Resolve hospital_id from slug if not provided
+    resolved_hospital_id = hospital_id
+    if slug and not resolved_hospital_id:
+        hospital = db.query(Hospital).filter(Hospital.slug == slug).first()
+        if hospital:
+            resolved_hospital_id = hospital.id
+
+    # Get doctors for this hospital (or all if no context)
+    query = db.query(Doctor)
+    if resolved_hospital_id:
+        query = query.filter(Doctor.hospital_id == resolved_hospital_id)
+    doctors = query.all()
     
     doctor_cards = ""
     for doctor in doctors:
@@ -601,13 +733,21 @@ async def get_test_recommendations(symptoms: str):
 
 # Enhanced doctor recommendation endpoint with router integration
 @app.post("/smart-recommend-doctors", response_model=list[DoctorRecommendation])
-async def smart_recommend_doctors(symptoms: str, db: Session = Depends(get_db)):
-    """Enhanced doctor recommendation with router LLM integration"""
+async def smart_recommend_doctors(
+    symptoms: str,
+    db: Session = Depends(get_db),
+    hospital_id: Optional[int] = Depends(optional_tenant_context()),
+):
+    """Enhanced doctor recommendation with router LLM integration, scoped by hospital when available."""
     try:
-        logger.info(f"Getting smart doctor recommendations for symptoms: {symptoms}")
+        logger.info(f"Getting smart doctor recommendations for symptoms: {symptoms}, hospital_id={hospital_id}")
         
-        # Get all doctors
-        doctors = db.query(Doctor).all()
+        # Get doctors scoped to current hospital (if provided)
+        query = db.query(Doctor)
+        if hospital_id:
+            query = query.filter(Doctor.hospital_id == hospital_id)
+        doctors = query.all()
+
         doctor_list = []
         for doctor in doctors:
             doctor_dict = {
@@ -615,12 +755,13 @@ async def smart_recommend_doctors(symptoms: str, db: Session = Depends(get_db)):
                 "name": doctor.name,
                 "department": doctor.department.name if doctor.department else "",
                 "subdivision": doctor.subdivision.name if doctor.subdivision else "",
-                "tags": doctor.tags if doctor.tags else []
+                "tags": doctor.tags if doctor.tags else [],
+                "hospital_id": doctor.hospital_id,
             }
             doctor_list.append(doctor_dict)
         
-        # Use enhanced LLM recommendation
-        recommendations = await get_doctor_recommendations(symptoms, doctor_list)
+        # Use enhanced LLM recommendation (with optional hospital filter)
+        recommendations = await get_doctor_recommendations(symptoms, doctor_list, hospital_id=hospital_id)
         
         # Parse recommendations
         import json
@@ -652,10 +793,14 @@ async def smart_recommend_doctors(symptoms: str, db: Session = Depends(get_db)):
 
 # Session-based patient history endpoints (Phase 1)
 @app.post("/chat-enhanced", response_model=list[DoctorRecommendation])
-async def chat_enhanced(request: EnhancedChatRequest, db: Session = Depends(get_db)):
-    """Enhanced chat endpoint with session-based patient history"""
+async def chat_enhanced(
+    request: EnhancedChatRequest,
+    db: Session = Depends(get_db),
+    hospital_id: Optional[int] = Depends(optional_tenant_context()),
+):
+    """Enhanced chat endpoint with session-based patient history, scoped by hospital when available."""
     try:
-        logger.info(f"Enhanced chat request from session: {request.session_id}")
+        logger.info(f"Enhanced chat request from session: {request.session_id}, hospital_id={hospital_id}")
         
         # Create session service
         session_service = SessionService(db)
@@ -681,8 +826,12 @@ async def chat_enhanced(request: EnhancedChatRequest, db: Session = Depends(get_
         if request.include_history:
             patient_context = session_service.generate_llm_context(request.session_id)
         
-        # Get all doctors
-        doctors = db.query(Doctor).all()
+        # Get doctors scoped to current hospital (if provided)
+        query = db.query(Doctor)
+        if hospital_id:
+            query = query.filter(Doctor.hospital_id == hospital_id)
+        doctors = query.all()
+
         doctor_list = []
         for doctor in doctors:
             doctor_dict = {
@@ -690,7 +839,8 @@ async def chat_enhanced(request: EnhancedChatRequest, db: Session = Depends(get_
                 "name": doctor.name,
                 "department": doctor.department.name if doctor.department else "",
                 "subdivision": doctor.subdivision.name if doctor.subdivision else "",
-                "tags": doctor.tags if doctor.tags else []
+                "tags": doctor.tags if doctor.tags else [],
+                "hospital_id": doctor.hospital_id,
             }
             doctor_list.append(doctor_dict)
         

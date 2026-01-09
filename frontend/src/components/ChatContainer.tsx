@@ -188,12 +188,16 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
       updateStep('diagnosis', 'completed');
       
       try {
-        // Get doctor recommendations using LLM, scoped to hospital
-        const doctors = await apiFetch('/recommend-doctors', {
-          slug: '',
-          method: 'POST',
-          body: { symptoms: diagnosticState.symptoms }
-        });
+        // Get doctor recommendations using LLM, scoped to current hospital via slug
+        const hospitalSlug = hospital?.slug || slug || '';
+        const doctors = await apiFetch(
+          `/recommend-doctors?slug=${encodeURIComponent(hospitalSlug)}`,
+          {
+            slug: '',
+            method: 'POST',
+            body: { symptoms: diagnosticState.symptoms }
+          }
+        );
         addMessage({
           content: "Based on your diagnosis, here are the recommended doctors:",
           role: 'assistant',
@@ -604,7 +608,8 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
     
     setIsLoading(true);
     try {
-      const response = await fetch(`http://localhost:8000/h/${slug}/cancel-appointment/${appointmentId}`, {
+      const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+      const response = await fetch(`${API_BASE}/h/${slug}/cancel-appointment/${appointmentId}`, {
         method: 'DELETE',
       });
       
@@ -636,7 +641,8 @@ const ChatContainer: React.FC<ChatContainerProps> = ({ isCalendarConnected = fal
   const handleCancelTest = async (bookingId: string) => {
     setIsLoading(true);
     try {
-      const response = await fetch(`http://localhost:8000/tests/cancel/${bookingId}`, {
+      const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+      const response = await fetch(`${API_BASE}/tests/cancel/${bookingId}`, {
         method: 'DELETE',
       });
       

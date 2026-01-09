@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
+import { useHospital } from '../contexts/HospitalContext';
 
 interface GoogleCalendarConnectProps {
   onConnectionChange?: (connected: boolean) => void;
 }
 
 const GoogleCalendarConnect: React.FC<GoogleCalendarConnectProps> = ({ onConnectionChange }) => {
+  const { hospital } = useHospital();
   const [isConnected, setIsConnected] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [doctorId, setDoctorId] = useState<number | null>(null);
@@ -21,7 +23,12 @@ const GoogleCalendarConnect: React.FC<GoogleCalendarConnectProps> = ({ onConnect
 
   const fetchDoctors = async () => {
     try {
-      const response = await fetch('http://localhost:8000/doctors');
+      const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+      const slug = hospital?.slug || '';
+      const url = slug
+        ? `${API_BASE}/doctors?slug=${encodeURIComponent(slug)}`
+        : `${API_BASE}/doctors`;
+      const response = await fetch(url);
       if (response.ok) {
         const doctorList = await response.json();
         setDoctors(doctorList);
@@ -96,7 +103,8 @@ const GoogleCalendarConnect: React.FC<GoogleCalendarConnectProps> = ({ onConnect
         localStorage.setItem('oauth_in_progress', 'true');
         
         // Redirect directly to OAuth endpoint with doctor_id as query param
-        const authUrl = `http://localhost:8000/auth/google/login?doctor_id=${selectedDoctorId}`;
+        const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+        const authUrl = `${API_BASE}/auth/google/login?doctor_id=${selectedDoctorId}`;
         console.log('Redirecting to auth URL:', authUrl);
         
         window.location.href = authUrl;
@@ -110,7 +118,12 @@ const GoogleCalendarConnect: React.FC<GoogleCalendarConnectProps> = ({ onConnect
   const checkConnectionStatus = async (doctorId: number) => {
     try {
       // Re-fetch doctors to check if the selected doctor now has calendar connected
-      const response = await fetch('http://localhost:8000/doctors');
+      const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+      const slug = hospital?.slug || '';
+      const url = slug
+        ? `${API_BASE}/doctors?slug=${encodeURIComponent(slug)}`
+        : `${API_BASE}/doctors`;
+      const response = await fetch(url);
       if (response.ok) {
         const doctorList = await response.json();
         const updatedDoctor = doctorList.find((d: any) => d.id === doctorId);

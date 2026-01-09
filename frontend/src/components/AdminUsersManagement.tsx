@@ -80,7 +80,8 @@ const AdminUsersManagement: React.FC<AdminUsersManagementProps> = ({ currentUser
         params.append('search', searchTerm);
       }
 
-      const response = await fetch(`http://localhost:8000/admin/users?${params}`, {
+      const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+      const response = await fetch(`${API_BASE}/admin/users?${params}`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
@@ -113,7 +114,8 @@ const AdminUsersManagement: React.FC<AdminUsersManagementProps> = ({ currentUser
   const handleCreateUser = async (userData: any) => {
     try {
       const token = localStorage.getItem('admin_access_token');
-      const response = await fetch('http://localhost:8000/admin/users', {
+      const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+      const response = await fetch(`${API_BASE}/admin/users`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -136,7 +138,8 @@ const AdminUsersManagement: React.FC<AdminUsersManagementProps> = ({ currentUser
   const handleUpdateUser = async (userId: number, userData: any) => {
     try {
       const token = localStorage.getItem('admin_access_token');
-      const response = await fetch(`http://localhost:8000/admin/users/${userId}`, {
+      const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+      const response = await fetch(`${API_BASE}/admin/users/${userId}`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -160,7 +163,8 @@ const AdminUsersManagement: React.FC<AdminUsersManagementProps> = ({ currentUser
   const handleDeleteUser = async (userId: number) => {
     try {
       const token = localStorage.getItem('admin_access_token');
-      const response = await fetch(`http://localhost:8000/admin/users/${userId}`, {
+      const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+      const response = await fetch(`${API_BASE}/admin/users/${userId}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -183,7 +187,8 @@ const AdminUsersManagement: React.FC<AdminUsersManagementProps> = ({ currentUser
   const handleToggleUserStatus = async (userId: number, isActive: boolean) => {
     try {
       const token = localStorage.getItem('admin_access_token');
-      const response = await fetch(`http://localhost:8000/admin/users/${userId}`, {
+      const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+      const response = await fetch(`${API_BASE}/admin/users/${userId}`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,

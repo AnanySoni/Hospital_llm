@@ -74,7 +74,8 @@ const AppointmentForm: React.FC<AppointmentFormProps> = ({ doctor, onSubmit, onC
 
     try {
       // Call phone recognition API
-      const response = await fetch('http://localhost:8000/phone-recognition', {
+      const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+      const response = await fetch(`${API_BASE}/phone-recognition`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone_number: formattedPhone }),
@@ -92,7 +93,7 @@ const AppointmentForm: React.FC<AppointmentFormProps> = ({ doctor, onSubmit, onC
           // Generate smart welcome if handler provided
           if (onPatientRecognized) {
             try {
-              const smartWelcomeResponse = await fetch('http://localhost:8000/smart-welcome', {
+              const smartWelcomeResponse = await fetch(`${API_BASE}/smart-welcome`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -130,7 +131,8 @@ const AppointmentForm: React.FC<AppointmentFormProps> = ({ doctor, onSubmit, onC
     
     setIsLoadingSlots(true);
     try {
-      const response = await fetch(`http://localhost:8000/h/${hospitalSlug}/doctors/${doctor.id}/available-slots?date=${appointmentDate}`);
+      const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+      const response = await fetch(`${API_BASE}/h/${hospitalSlug}/doctors/${doctor.id}/available-slots?date=${appointmentDate}`);
       if (response.ok) {
         const slots = await response.json();
         setAvailableSlots(slots);

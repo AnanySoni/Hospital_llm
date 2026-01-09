@@ -3,13 +3,65 @@ Appointment Service Layer
 Handles all appointment-related business logic
 """
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 
 from backend.core import models
 from backend.integrations.google_calendar import create_calendar_event
+
+
+def generate_slots_for_date_range(
+    db: Session,
+    doctor_id: int,
+    start_date: date,
+    end_date: date,
+    time_slots: Optional[List[str]] = None,
+) -> int:
+    """
+    Generate availability slots for a doctor for a date range.
+    Returns count of slots created.
+    """
+    if time_slots is None:
+        # Default time slots (morning, afternoon, evening)
+        time_slots = [
+            "09:00-09:30", "09:30-10:00", "10:00-10:30", "10:30-11:00",
+            "11:00-11:30", "11:30-12:00",  # Morning
+            "14:00-14:30", "14:30-15:00", "15:00-15:30", "15:30-16:00",
+            "16:00-16:30", "16:30-17:00",  # Afternoon
+            "18:00-18:30", "18:30-19:00", "19:00-19:30", "19:30-20:00",
+            "20:00-20:30", "20:30-21:00",  # Evening
+        ]
+
+    slots_created = 0
+    current_date = start_date
+
+    while current_date <= end_date:
+        # Skip weekends (Saturday = 5, Sunday = 6)
+        if current_date.weekday() < 5:
+            for time_slot in time_slots:
+                # Check if slot already exists
+                existing = db.query(models.DoctorAvailability).filter(
+                    models.DoctorAvailability.doctor_id == doctor_id,
+                    models.DoctorAvailability.date == current_date,
+                    models.DoctorAvailability.time_slot == time_slot,
+                ).first()
+
+                if not existing:
+                    availability = models.DoctorAvailability(
+                        doctor_id=doctor_id,
+                        date=current_date,
+                        time_slot=time_slot,
+                        is_booked=False,
+                    )
+                    db.add(availability)
+                    slots_created += 1
+
+        current_date += timedelta(days=1)
+
+    db.commit()
+    return slots_created
 
 
 class AppointmentService:

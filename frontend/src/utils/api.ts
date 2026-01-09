@@ -12,12 +12,18 @@ export interface ApiOptions {
 export async function apiFetch(endpoint: string, options: ApiOptions) {
   const { slug, token, method = 'GET', body, headers = {} } = options;
   let url = endpoint;
-  // Only prepend if not already a multi-tenant v2 path and slug is not empty
-  if (!endpoint.includes('/v2/h/') && slug && slug.trim() !== '') {
+  // Only prepend if not already a multi-tenant v2 path and slug is not empty.
+  // IMPORTANT: Do NOT rewrite /admin/* endpoints here – they handle slug via query params.
+  if (!endpoint.includes('/v2/h/') && !endpoint.startsWith('/admin/') && slug && slug.trim() !== '') {
     if (!endpoint.startsWith('/h/')) {
       url = `/h/${slug}${endpoint.startsWith('/') ? endpoint : '/' + endpoint}`;
     }
   }
+  
+  // Add backend base URL from environment variable
+  const baseUrl = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+  const fullUrl = url.startsWith('http') ? url : `${baseUrl}${url}`;
+  
   const fetchOptions: RequestInit = {
     method,
     headers: {
@@ -28,7 +34,7 @@ export async function apiFetch(endpoint: string, options: ApiOptions) {
     ...(body ? { body: JSON.stringify(body) } : {}),
   };
   try {
-    const res = await fetch(url, fetchOptions);
+    const res = await fetch(fullUrl, fetchOptions);
     if (!res.ok) {
       let errorMsg = `API error: ${res.status}`;
       try {

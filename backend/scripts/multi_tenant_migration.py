@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+from pathlib import Path
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from backend.core.models import (
@@ -9,9 +10,16 @@ from backend.core.models import (
 from backend.services.auth_service import AuthService
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env from project root explicitly
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ENV_PATH = PROJECT_ROOT / ".env"
+load_dotenv(ENV_PATH)
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:kev1jiph@localhost:5432/hospital_db")
+# Require explicit DATABASE_URL; do not fall back to a hardcoded user
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL environment variable is required for multi_tenant_migration")
+
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine)
 

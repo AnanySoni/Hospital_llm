@@ -36,6 +36,7 @@ class Doctor(Base):
     id = Column(Integer, primary_key=True, index=True)
     hospital_id = Column(Integer, ForeignKey('hospitals.id'), nullable=True, index=True)  # Will be set via migration
     name = Column(String(100), nullable=False)
+    email = Column(String(100), nullable=False, index=True, unique=True)
     department_id = Column(Integer, ForeignKey('departments.id'))
     subdivision_id = Column(Integer, ForeignKey('subdivisions.id'))
     profile = Column(Text)
@@ -539,8 +540,14 @@ class Hospital(Base):
     updated_at = Column(DateTime, server_default=func.current_timestamp(), onupdate=func.current_timestamp())
     status = Column(String(20), default='active')  # active/inactive
     
+    # Onboarding fields
+    onboarding_status = Column(String(20), default='completed')  # not_started, in_progress, completed
+    onboarding_completed_at = Column(DateTime, nullable=True)
+    created_by_admin_id = Column(Integer, ForeignKey('admin_users.id'), nullable=True)  # Admin who created this hospital
+    
     # Relationships
-    admin_users = relationship('AdminUser', back_populates='hospital')
+    admin_users = relationship('AdminUser', back_populates='hospital', foreign_keys='AdminUser.hospital_id')
+    created_by_admin = relationship('AdminUser', foreign_keys=[created_by_admin_id], uselist=False)
     doctors = relationship('Doctor', back_populates='hospital')
     patients = relationship('Patient', back_populates='hospital')
     appointments = relationship('Appointment', back_populates='hospital')
@@ -575,6 +582,14 @@ class AdminUser(Base):
     first_name = Column(String(100), nullable=False)
     last_name = Column(String(100), nullable=False)
     phone = Column(String(20))
+    # Onboarding / auth metadata
+    email_verified = Column(Boolean, default=False)
+    email_verified_at = Column(DateTime, nullable=True)
+    auth_provider = Column(String(50), default='email')  # email, google, both
+    google_user_id = Column(String(255), unique=True, nullable=True)
+    company_name = Column(String(200), nullable=True)  # Temporary until hospital is created
+    onboarding_session_id = Column(Integer, nullable=True)  # Will link to OnboardingSession
+    last_onboarding_step = Column(Integer, nullable=True)
     is_active = Column(Boolean, default=True)
     is_super_admin = Column(Boolean, default=False)  # Can manage multiple hospitals
     last_login = Column(DateTime)
@@ -587,7 +602,7 @@ class AdminUser(Base):
     updated_at = Column(DateTime, server_default=func.current_timestamp(), onupdate=func.current_timestamp())
     
     # Relationships
-    hospital = relationship('Hospital', back_populates='admin_users')
+    hospital = relationship('Hospital', back_populates='admin_users', foreign_keys=[hospital_id])
     user_roles = relationship('UserRole', back_populates='admin_user', foreign_keys='UserRole.admin_user_id')
     granted_roles = relationship('UserRole', foreign_keys='UserRole.granted_by')
     audit_logs = relationship('AuditLog', back_populates='admin_user')
@@ -651,6 +666,115 @@ class AuditLog(Base):
     created_at = Column(DateTime, server_default=func.current_timestamp())
     hospital = relationship('Hospital', back_populates='audit_logs')
     admin_user = relationship('AdminUser', back_populates='audit_logs')
+
+
+# ============================================================================
+# ONBOARDING / EMAIL VERIFICATION MODELS
+# ============================================================================
+
+
+class OnboardingSession(Base):
+    """
+    Tracks progress of a hospital admin through the onboarding flow.
+    """
+    __tablename__ = 'onboarding_sessions'
+
+    id = Column(Integer, primary_key=True, index=True)
+    admin_user_id = Column(Integer, ForeignKey('admin_users.id'), nullable=False)
+    hospital_id = Column(Integer, ForeignKey('hospitals.id'), nullable=True)
+    current_step = Column(Integer, default=1)
+    completed_steps = Column(Text, default='[]')  # JSON array of completed step numbers
+    partial_data = Column(Text, default='{}')  # JSON object with per-step form data
+    status = Column(String(20), default='in_progress')  # in_progress, completed, abandoned
+    started_at = Column(DateTime, server_default=func.current_timestamp())
+    last_updated_at = Column(DateTime, server_default=func.current_timestamp(), onupdate=func.current_timestamp())
+    completed_at = Column(DateTime, nullable=True)
+    abandoned_at = Column(DateTime, nullable=True)
+    step_started_at = Column(DateTime, nullable=True)  # Track when current step started
+    step_timings = Column(Text, default='{}')  # JSON: {step_number: seconds_spent}
+
+
+class EmailVerification(Base):
+    """
+    Stores one-time tokens for verifying admin user emails (and later password reset).
+    """
+    __tablename__ = 'email_verifications'
+
+    id = Column(Integer, primary_key=True, index=True)
+    admin_user_id = Column(Integer, ForeignKey('admin_users.id'), nullable=False)
+    email = Column(String(100), nullable=False)
+    token = Column(String(255), unique=True, nullable=False)
+    verification_type = Column(String(50), default='email_verification')  # email_verification, password_reset, etc.
+    created_at = Column(DateTime, server_default=func.current_timestamp())
+    expires_at = Column(DateTime, nullable=False)
+    verified_at = Column(DateTime, nullable=True)
+    used = Column(Boolean, default=False, nullable=False, index=True)  # One-time use flag
+    used_at = Column(DateTime, nullable=True)  # When token was used
+
+
+class RateLimitLog(Base):
+    """
+    Tracks rate limit attempts for security and abuse prevention.
+    """
+    __tablename__ = 'rate_limit_logs'
+
+    id = Column(Integer, primary_key=True, index=True)
+    identifier = Column(String(255), nullable=False, index=True)  # IP address or user_id
+    endpoint = Column(String(100), nullable=False, index=True)
+    created_at = Column(DateTime, server_default=func.current_timestamp(), index=True)
+    
+    __table_args__ = (
+        Index('idx_identifier_endpoint_created', 'identifier', 'endpoint', 'created_at'),
+    )
+
+
+class OnboardingAnalytics(Base):
+    """
+    Tracks onboarding metrics and user behavior.
+    """
+    __tablename__ = 'onboarding_analytics'
+
+    id = Column(Integer, primary_key=True, index=True)
+    onboarding_session_id = Column(Integer, ForeignKey('onboarding_sessions.id'), nullable=True)
+    admin_user_id = Column(Integer, ForeignKey('admin_users.id'), nullable=True)
+    
+    # Event tracking
+    event_type = Column(String(50), nullable=False, index=True)  # registration_start, step_complete, drop_off, etc.
+    event_data = Column(Text)  # JSON with event details
+    
+    # Timing
+    step_number = Column(Integer, nullable=True)
+    time_spent_seconds = Column(Integer, nullable=True)  # Time on step before event
+    
+    # Metadata
+    signup_method = Column(String(20))  # google, email
+    ip_address = Column(String(45))
+    user_agent = Column(Text)
+    
+    created_at = Column(DateTime, server_default=func.current_timestamp(), index=True)
+    
+    # Relationships
+    onboarding_session = relationship('OnboardingSession', backref='analytics_events')
+    admin_user = relationship('AdminUser', backref='onboarding_analytics')
+
+
+class TrialPeriod(Base):
+    """
+    Tracks trial periods for hospitals (deferred - table creation not implemented yet).
+    This model is defined for future use when trial period functionality is needed.
+    """
+    __tablename__ = 'trial_periods'
+
+    id = Column(Integer, primary_key=True, index=True)
+    hospital_id = Column(Integer, ForeignKey('hospitals.id'), nullable=False, unique=True)
+    started_at = Column(DateTime, server_default=func.current_timestamp(), nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    usage_limits = Column(Text, default='{}')  # JSON object with usage limits
+    status = Column(String(20), default='active')  # active, expired, converted
+    converted_at = Column(DateTime, nullable=True)  # When trial converted to paid
+    created_at = Column(DateTime, server_default=func.current_timestamp())
+    updated_at = Column(DateTime, server_default=func.current_timestamp(), onupdate=func.current_timestamp())
+
 
 # ============================================================================
 # ENHANCE EXISTING MODELS WITH HOSPITAL_ID

@@ -1,0 +1,2364 @@
+
+## **Phase 1: Detailed implementation steps (with Google Auth)**
+
+### **Overview**
+Enable self-service hospital registration with Google OAuth, email verification, and basic onboarding. Goal: verified admin → hospital with unique URL.
+
+---
+
+## **Step 1: Google OAuth setup and registration flow**
+
+### **1.1 Backend: Google OAuth configuration**
+- Set up Google OAuth 2.0 credentials in Google Cloud Console
+- Create OAuth client (Web application)
+- Configure authorized redirect URIs (production + development)
+- Store client ID and secret in environment variables
+- Add scopes: `email`, `profile`, `openid`
+- Create OAuth service module to handle Google authentication flow
+
+### **1.2 Backend: Registration endpoint with company name**
+- Create `POST /onboarding/register` endpoint
+- Accept: email, password (optional if Google Auth), company_name (required)
+- Validate company name (2-100 chars, no special chars except spaces/hyphens)
+- Check if email already exists
+- Check if company name is already taken (for slug generation later)
+- Hash password if provided (for email/password option)
+- Create AdminUser record with:
+  - Email (from Google or form)
+  - Company name (stored temporarily)
+  - `email_verified = False`
+  - `is_active = False` (until email verified)
+  - `auth_provider = 'google'` or `'email'`
+  - `google_user_id` (if Google Auth)
+- Create OnboardingSession record linked to AdminUser
+- Generate email verification token
+- Send verification email
+
+### **1.3 Frontend: Registration page**
+- Landing page with two options:
+  - "Sign up with Google" button
+  - "Sign up with Email" form
+- If Google:
+  - Redirect to Google OAuth consent screen
+  - On callback, extract email and name from Google profile
+  - Show form to collect:
+    - Company name (required, with validation)
+    - Confirm email (pre-filled, editable)
+    - Optional: password (for future email login)
+  - Submit to registration endpoint
+- If Email:
+  - Form fields:
+    - Company name (required)
+    - Email (required, validated)
+    - Password (required, strength indicator)
+    - Confirm password
+  - Real-time validation
+  - Submit to registration endpoint
+- Show success message: "Check your email to verify your account"
+
+---
+
+## **Step 2: Email verification system**
+
+### **2.1 Backend: Email verification table**
+- Create `EmailVerification` table:
+  - `id` (primary key)
+  - `admin_user_id` (foreign key to AdminUser)
+  - `token` (unique, secure random token)
+  - `email` (email being verified)
+  - `created_at` (timestamp)
+  - `expires_at` (24 hours from creation)
+  - `verified_at` (nullable timestamp)
+  - `verification_type` ('email_verification', 'password_reset', etc.)
+
+### **2.2 Backend: Email verification endpoints**
+- `POST /onboarding/send-verification-email`
+  - Accepts email or user_id
+  - Generates new verification token
+  - Saves to EmailVerification table
+  - Sends email with verification link
+  - Rate limit: max 3 emails per hour per user
+- `GET /onboarding/verify-email/{token}`
+  - Validates token (exists, not expired, not used)
+  - Marks email as verified in AdminUser
+  - Sets `email_verified_at` timestamp
+  - Marks verification record as used
+  - Activates user account (`is_active = True`)
+  - If OnboardingSession exists, mark step 1 complete
+  - Redirect to onboarding step 2 (hospital info)
+
+### **2.3 Backend: Email service**
+- Create email templates:
+  - Verification email (HTML + plain text)
+  - Welcome email (after verification)
+  - Password reset email
+- Include:
+  - Hospital branding (if available)
+  - Clear call-to-action button
+  - Expiration notice (24 hours)
+  - Support contact info
+- Use environment variables for email service credentials (SendGrid, AWS SES, etc.)
+
+### **2.4 Frontend: Email verification page**
+- Verification success page:
+  - "Email verified successfully"
+  - Auto-redirect to onboarding (3 seconds)
+  - Manual "Continue" button
+- Verification error page:
+  - "Link expired or invalid"
+  - "Resend verification email" button
+  - Link to support
+
+---
+
+## **Step 3: Hospital information and slug creation**
+
+### **3.1 Backend: Reserved slugs system**
+- Create `reserved_slugs` table:
+  - `slug` (primary key, lowercase)
+  - `reason` (why it's reserved: 'system', 'admin', 'api', etc.)
+  - `reserved_at` (timestamp)
+- Pre-populate with system slugs:
+  - `admin`, `api`, `www`, `support`, `help`, `docs`, `app`, `dashboard`, `login`, `register`, `auth`, `oauth`, `callback`, `health`, `status`
+- Create slug validation service:
+  - Check format (lowercase, alphanumeric + hyphens, 3-50 chars)
+  - Check availability (not in reserved_slugs, not in hospitals table)
+  - Suggest alternatives if taken
+  - Real-time availability checking
+
+### **3.2 Backend: Hospital creation endpoint**
+- `POST /onboarding/hospital-info`
+  - Requires authenticated, verified admin user
+  - Accepts:
+    - Hospital name (required, 2-200 chars)
+    - Slug (required, validated)
+    - Address (optional)
+    - Phone (optional, validated)
+    - Website (optional, URL format)
+  - Validates slug availability in real-time
+  - Creates Hospital record:
+    - `name` (from form)
+    - `slug` (validated, lowercase)
+    - `address` (if provided)
+    - `phone` (if provided)
+    - `website` (if provided)
+    - `onboarding_status = 'in_progress'`
+    - `created_by_admin_id` (link to AdminUser)
+  - Links AdminUser to Hospital (`hospital_id` set)
+  - Updates OnboardingSession:
+    - `current_step = 2`
+    - `hospital_id` (link to created hospital)
+    - Store partial data in JSON field
+  - Returns hospital data with slug
+
+### **3.3 Frontend: Hospital information form**
+- Step 2 of onboarding wizard
+- Form fields:
+  - Hospital name (required, auto-focus)
+  - Slug field:
+    - Auto-generate from hospital name (lowercase, replace spaces with hyphens)
+    - Real-time validation (green checkmark if available, red X if taken)
+    - Show suggestions if taken
+    - Manual override allowed
+    - Preview: "Your URL will be: yourdomain.com/h/{slug}"
+  - Address (optional)
+  - Phone (optional, with country code selector)
+  - Website (optional, with http/https prefix)
+- Progress indicator: "Step 2 of 4"
+- "Back" button (to step 1)
+- "Continue" button (disabled until valid)
+- Save progress automatically (debounced, every 5 seconds)
+
+---
+
+## **Step 4: Onboarding session management**
+
+### **4.1 Backend: OnboardingSession table**
+- Create `OnboardingSession` table:
+  - `id` (primary key)
+  - `admin_user_id` (foreign key, not nullable)
+  - `hospital_id` (foreign key, nullable until hospital created)
+  - `current_step` (integer, 1-4)
+  - `completed_steps` (JSON array of completed step numbers)
+  - `partial_data` (JSON field storing form data at each step)
+  - `started_at` (timestamp)
+  - `last_updated_at` (timestamp, auto-update)
+  - `completed_at` (nullable timestamp)
+  - `abandoned_at` (nullable timestamp)
+  - `status` ('in_progress', 'completed', 'abandoned')
+
+### **4.2 Backend: Onboarding session endpoints**
+- `GET /onboarding/session`
+  - Returns current user's onboarding session
+  - If no session, create one (step 1)
+  - Returns: current_step, completed_steps, partial_data, status
+- `POST /onboarding/session/update-step`
+  - Updates current_step
+  - Saves partial_data (form data)
+  - Marks step as completed in completed_steps array
+  - Updates last_updated_at
+- `GET /onboarding/session/resume`
+  - Returns the step the user should resume at
+  - Loads partial_data for that step
+  - Used when user returns to onboarding
+
+### **4.3 Frontend: Onboarding wizard component**
+- Multi-step wizard component:
+  - Progress bar at top (4 steps)
+  - Step 1: Account creation (Google Auth or Email)
+  - Step 2: Email verification (if needed)
+  - Step 3: Hospital information + slug
+  - Step 4: (Future) Doctor setup
+- State management:
+  - Load session on mount
+  - Auto-save form data (debounced)
+  - Resume from last step
+  - Show completion percentage
+- Navigation:
+  - "Back" button (except step 1)
+  - "Save & Continue" button
+  - "Save & Exit" button (saves progress, logs out)
+
+---
+
+## **Step 5: Database migrations and model updates**
+
+### **5.1 Update AdminUser model**
+- Add fields:
+  - `email_verified` (Boolean, default False)
+  - `email_verified_at` (DateTime, nullable)
+  - `auth_provider` (String: 'google', 'email', 'both')
+  - `google_user_id` (String, nullable, unique)
+  - `company_name` (String, nullable, temporary until hospital created)
+  - `onboarding_session_id` (Foreign key to OnboardingSession, nullable)
+  - `last_onboarding_step` (Integer, nullable)
+
+### **5.2 Update Hospital model**
+- Add fields:
+  - `onboarding_status` (String: 'not_started', 'in_progress', 'completed', 'abandoned')
+  - `onboarding_completed_at` (DateTime, nullable)
+  - `created_by_admin_id` (Foreign key to AdminUser)
+  - `slug` (String, unique, indexed - may already exist, verify)
+
+### **5.3 Create new tables**
+- OnboardingSession (as described above)
+- EmailVerification (as described above)
+- ReservedSlugs (as described above)
+- TrialPeriod (for future use):
+  - `id`, `hospital_id`, `start_date`, `end_date`, `status`, `usage_limits`
+
+### **5.4 Migration script**
+- Create Alembic migration or SQL script
+- Add indexes on:
+  - `admin_users.email_verified`
+  - `admin_users.google_user_id`
+  - `hospitals.slug`
+  - `onboarding_sessions.admin_user_id`
+  - `email_verifications.token`
+- Add foreign key constraints
+- Set up cascade deletes where appropriate
+
+---
+
+## **Step 6: Security and validation**
+
+### **6.1 Input validation**
+- Company name: 2-100 chars, alphanumeric + spaces/hyphens, trim whitespace
+- Email: RFC 5322 compliant, lowercase, domain validation
+- Slug: lowercase, alphanumeric + hyphens, 3-50 chars, no consecutive hyphens, not starting/ending with hyphen
+- Password (if email signup): min 8 chars, complexity requirements, common password check
+
+### **6.2 Rate limiting**
+- Registration: 5 attempts per IP per hour
+- Email verification resend: 3 per user per hour
+- Slug availability check: 100 per IP per minute
+- OAuth callback: 10 per IP per hour
+
+### **6.3 Security measures**
+- CSRF protection on all forms
+- Secure token generation (secrets.token_urlsafe)
+- Token expiration (24 hours for email verification)
+- One-time use tokens (mark as used after verification)
+- IP logging for audit trail
+- Account lockout after 5 failed login attempts
+
+---
+
+## **Step 7: User experience enhancements**
+
+### **7.1 Real-time feedback**
+- Slug availability: instant check as user types (debounced 500ms)
+- Email format validation: show error immediately
+- Password strength meter: visual indicator
+- Form field validation: inline error messages
+
+### **7.2 Error handling**
+- Clear error messages:
+  - "This email is already registered"
+  - "This slug is already taken. Try: city-general-hospital-2"
+  - "Verification link expired. We'll send a new one."
+- Recovery options:
+  - "Forgot password?" link
+  - "Resend verification email" button
+  - "Change slug" option before finalizing
+
+### **7.3 Onboarding analytics**
+- Track:
+  - Registration start rate
+  - Completion rate per step
+  - Drop-off points
+  - Time to complete each step
+  - Google Auth vs Email signup ratio
+- Store in OnboardingSession or separate analytics table
+
+---
+
+## **Step 8: Testing and validation**
+
+### **8.1 Unit tests**
+- Slug validation logic
+- Email verification token generation
+- Google OAuth callback handling
+- Company name validation
+
+### **8.2 Integration tests**
+- Complete registration flow (Google Auth)
+- Complete registration flow (Email)
+- Email verification flow
+- Slug creation and validation
+- Session resume functionality
+
+### **8.3 Manual testing checklist**
+- [ ] Google OAuth flow works
+- [ ] Email registration works
+- [ ] Company name is required and validated
+- [ ] Email verification link works
+- [ ] Slug generation is smart
+- [ ] Reserved slugs are blocked
+- [ ] Onboarding session saves progress
+- [ ] User can resume onboarding
+- [ ] Error messages are clear
+- [ ] Rate limiting works
+
+---
+
+## **Success criteria for Phase 1**
+
+1. Hospital admin can register with Google Auth or email
+2. Company name is collected during registration
+3. Email is verified before proceeding
+4. Hospital can create account with unique slug
+5. Slug is validated in real-time
+6. Onboarding progress is saved and resumable
+7. All data is stored in database (no in-memory storage)
+8. Security measures are in place (rate limiting, validation, etc.)
+
+---
+
+## **Critical decisions**
+
+1. Google Auth flow:
+   - Option A: Full OAuth (redirect to Google, callback)
+   - Option B: Google Sign-In JavaScript SDK (popup)
+   - Recommendation: Option A (more secure, better UX)
+
+2. Company name collection:
+   - Option A: During Google Auth callback (before creating account)
+   - Option B: After account creation, before email verification
+   - Recommendation: Option B (cleaner separation, allows email verification first)
+
+3. Slug generation:
+   - Option A: Auto-generate from company name, allow edit
+   - Option B: Let user type from scratch
+   - Recommendation: Option A with smart suggestions (best UX)
+
+This plan provides a production-ready onboarding flow with Google Auth integration.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## Optimal hospital onboarding flow
+
+### Current issues
+1. No self-service onboarding — hospitals can't sign up themselves
+2. Manual slug generation — no real-time validation
+3. No progress tracking — can't resume where they left off
+4. No email verification — security risk
+5. No trial period — hospitals can't test before committing
+6. Doctor import is clunky — CSV upload exists but no preview/validation
+7. No completion checklist — hospitals don't know what's missing
+8. No integration guide — hospitals don't know how to integrate
+
+---
+
+## Optimal onboarding architecture
+
+### Flow overview
+
+```
+Hospital Landing Page
+    ↓
+Step 1: Account Creation (Email + Password)
+    ↓
+Step 2: Email Verification
+    ↓
+Step 3: Hospital Information
+    ↓
+Step 4: URL/Slug Selection
+    ↓
+Step 5: Departments Setup
+    ↓
+Step 6: Doctors Import
+    ↓
+Step 7: Calendar Integration (Optional)
+    ↓
+Step 8: Integration Code
+    ↓
+Step 9: Test & Launch
+```
+
+---
+
+## Step-by-step breakdown
+
+### Step 1: Account creation
+
+What it looks like:
+```
+┌──────────────────────────────────────────┐
+│  🏥 Welcome to Hospital AI Platform      │
+│  ────────────────────────────────────── │
+│                                         │
+│  Create Your Account                    │
+│                                         │
+│  Email: [________________]             │
+│  Password: [________________]          │
+│  Confirm Password: [________________]   │
+│                                         │
+│  ☑ I agree to Terms & Conditions       │
+│  ☑ I understand this is a trial period │
+│                                         │
+│  [Create Account]                       │
+│                                         │
+│  Already have an account? [Sign In]    │
+└──────────────────────────────────────────┘
+```
+
+What happens:
+- Create admin user account (not hospital yet)
+- Send verification email
+- Start 14-day trial period
+- Store onboarding progress in database
+- Track: email, password hash, verification status, trial start date
+
+Why this order:
+- Email verification first prevents fake accounts
+- Trial period starts immediately
+- Can resume onboarding if interrupted
+
+---
+
+### Step 2: Email verification
+
+What it looks like:
+```
+┌──────────────────────────────────────────┐
+│  📧 Verify Your Email                    │
+│  ────────────────────────────────────── │
+│                                         │
+│  We sent a verification link to:        │
+│  admin@hospital.com                     │
+│                                         │
+│  [Resend Email]                         │
+│                                         │
+│  ┌───────────────────────────────────┐ │
+│  │  Enter verification code:         │ │
+│  │  [____] [____] [____] [____]      │ │
+│  │  (or click link in email)         │ │
+│  └───────────────────────────────────┘ │
+│                                         │
+│  [Verify & Continue]                    │
+└──────────────────────────────────────────┘
+```
+
+What happens:
+- User clicks link or enters code
+- Mark email as verified
+- Create session
+- Redirect to Step 3
+- Track: verification timestamp, IP address
+
+---
+
+### Step 3: Hospital information
+
+What it looks like:
+```
+┌──────────────────────────────────────────┐
+│  Step 3 of 9: Hospital Information       │
+│  ████████░░░░░░░░░ 33% Complete         │
+│                                         │
+│  Hospital Name: *                        │
+│  [City General Hospital________]         │
+│                                         │
+│  Display Name: *                         │
+│  [City General Hospital - Main Branch]   │
+│                                         │
+│  Address:                                │
+│  [123 Healthcare Street, Medical City]   │
+│                                         │
+│  Phone: *                                │
+│  [+91-9876543210]                        │
+│                                         │
+│  Website:                                │
+│  [https://citygeneral.com]               │
+│                                         │
+│  [← Back]  [Save & Continue →]          │
+└──────────────────────────────────────────┘
+```
+
+What happens:
+- Validate required fields
+- Auto-generate slug suggestion (can be edited in next step)
+- Save to database (hospital not active yet)
+- Track: completion status, data entered
+
+Why this order:
+- Basic info needed before slug generation
+- Can validate hospital name format
+- Allows slug customization later
+
+---
+
+### Step 4: URL/Slug selection (critical step)
+
+What it looks like:
+```
+┌──────────────────────────────────────────┐
+│  Step 4 of 9: Choose Your URL            │
+│  ████████████░░░░░░ 44% Complete         │
+│                                         │
+│  Your Chat URL:                          │
+│  ┌───────────────────────────────────┐ │
+│  │  https://yourdomain.com/h/         │ │
+│  │  [city-general-hospital]           │ │
+│  │  ✅ Available                       │ │
+│  └───────────────────────────────────┘ │
+│                                         │
+│  💡 Suggestions:                        │
+│  • city-general-hospital ✅             │
+│  • citygeneral ✅                       │
+│  • city-general-hosp ✅                 │
+│                                         │
+│  ⚠️ Rules:                             │
+│  • Only lowercase letters, numbers, -   │
+│  • 3-50 characters                     │
+│  • Must be unique                      │
+│                                         │
+│  [← Back]  [Continue →]                 │
+└──────────────────────────────────────────┘
+```
+
+How slug generation works:
+1. Auto-suggest from hospital name
+   - "City General Hospital" → "city-general-hospital"
+   - Remove special characters, lowercase, replace spaces with hyphens
+2. Real-time availability check
+   - As user types, check database
+   - Show ✅ Available or ❌ Taken
+   - Suggest alternatives if taken
+3. Validation rules
+   - 3-50 characters
+   - Only lowercase, numbers, hyphens
+   - No reserved words (admin, api, www, etc.)
+   - No consecutive hyphens
+4. Conflict resolution
+   - If "city-general" taken → suggest "city-general-2"
+   - Show 3 alternative suggestions
+   - Allow manual entry
+
+What happens:
+- Check uniqueness in real-time
+- Validate format
+- Reserve slug (temporary lock for 5 minutes)
+- Save to database
+- Track: slug, validation status, alternatives shown
+
+Why this is critical:
+- Slug can't be changed easily later
+- Affects all URLs
+- Must be unique across all hospitals
+- Real-time validation prevents errors
+
+---
+
+### Step 5: Departments setup
+
+What it looks like:
+```
+┌──────────────────────────────────────────┐
+│  Step 5 of 9: Departments               │
+│  ████████████████░░░░ 56% Complete      │
+│                                         │
+│  Add Your Departments                    │
+│                                         │
+│  ┌───────────────────────────────────┐ │
+│  │  Department Name:                 │ │
+│  │  [Cardiology________________]      │ │
+│  │  [Add Department]                 │ │
+│  └───────────────────────────────────┘ │
+│                                         │
+│  Your Departments:                      │
+│  ┌───────────────────────────────────┐ │
+│  │  ✓ Cardiology                     │ │
+│  │  ✓ Neurology                       │ │
+│  │  ✓ General Medicine                │ │
+│  │  [Add More]                         │ │
+│  └───────────────────────────────────┘ │
+│                                         │
+│  💡 Tip: Add at least 3-5 departments   │
+│                                         │
+│  [← Back]  [Continue →]                 │
+└──────────────────────────────────────────┘
+```
+
+What happens:
+- Create departments in database
+- Link to hospital_id
+- Allow adding/removing before continuing
+- Validate: at least 1 department required
+- Track: departments created, count
+
+Why this order:
+- Doctors need departments
+- Can add more later
+- Validates hospital structure
+
+---
+
+### Step 6: Doctors import (most complex)
+
+What it looks like:
+```
+┌──────────────────────────────────────────┐
+│  Step 6 of 9: Add Doctors                │
+│  ████████████████████░░ 67% Complete     │
+│                                         │
+│  Option 1: Bulk Upload (Recommended)    │
+│  ┌───────────────────────────────────┐ │
+│  │  📄 Upload CSV File                │ │
+│  │  [Choose File] [Upload]            │ │
+│  │                                    │ │
+│  │  Download template: [CSV Template]│ │
+│  └───────────────────────────────────┘ │
+│                                         │
+│  Option 2: Add Manually                 │
+│  ┌───────────────────────────────────┐ │
+│  │  Name: [Dr. Sarah Johnson]        │ │
+│  │  Department: [Cardiology ▼]       │ │
+│  │  Phone: [+91-9876543210]          │ │
+│  │  Specialization: [Heart Surgery]  │ │
+│  │  [Add Doctor]                      │ │
+│  └───────────────────────────────────┘ │
+│                                         │
+│  Preview (Before Saving):               │
+│  ┌───────────────────────────────────┐ │
+│  │  ✓ Dr. Sarah Johnson - Cardiology │ │
+│  │  ✓ Dr. Michael Chen - Neurology   │ │
+│  │  ⚠️ Dr. John Doe - (No dept)      │ │
+│  │  [Edit] [Remove]                  │ │
+│  └───────────────────────────────────┘ │
+│                                         │
+│  [← Back]  [Save Doctors →]             │
+└──────────────────────────────────────────┘
+```
+
+How bulk import works:
+1. CSV upload
+   - Validate file format
+   - Parse CSV
+   - Show preview with validation
+2. Preview & validation
+   - Show all doctors with status
+   - Highlight errors (missing fields, invalid data)
+   - Allow editing before saving
+3. Department matching
+   - Auto-match department names
+   - Suggest if close match
+   - Flag if department doesn't exist
+4. Save
+   - Create all doctors in transaction
+   - Rollback if any error
+   - Show success count
+
+What happens:
+- Validate CSV format
+- Parse and preview
+- Validate each doctor
+- Create doctors in database
+- Link to departments
+- Track: doctors added, errors, validation status
+
+Why this is critical:
+- Hospitals often have many doctors
+- Manual entry is slow
+- Errors cause data issues
+- Preview prevents mistakes
+
+---
+
+### Step 7: Calendar integration (optional)
+
+What it looks like:
+```
+┌──────────────────────────────────────────┐
+│  Step 7 of 9: Calendar Integration       │
+│  ████████████████████████░░ 78% Complete│
+│                                         │
+│  Connect Google Calendar (Optional)     │
+│                                         │
+│  Benefits:                              │
+│  • Automatic appointment sync           │
+│  • Real-time availability               │
+│  • Reduce double bookings               │
+│                                         │
+│  ┌───────────────────────────────────┐ │
+│  │  [Connect Google Calendar]         │ │
+│  │                                    │ │
+│  │  Or skip for now: [Skip This Step]│ │
+│  └───────────────────────────────────┘ │
+│                                         │
+│  💡 You can set this up later in       │
+│     Admin Panel → Calendar Settings     │
+│                                         │
+│  [← Back]  [Continue →]                 │
+└──────────────────────────────────────────┘
+```
+
+What happens:
+- OAuth flow for Google Calendar
+- Connect per doctor (or bulk)
+- Store tokens securely
+- Track: calendar connected, doctors connected
+
+Why optional:
+- Not required to launch
+- Can be done later
+- Some hospitals may not use Google Calendar
+
+---
+
+### Step 8: Integration code generation
+
+What it looks like:
+```
+┌──────────────────────────────────────────┐
+│  Step 8 of 9: Integration Code          │
+│  ████████████████████████████░░ 89%      │
+│                                         │
+│  Your Integration Code                  │
+│                                         │
+│  ┌───────────────────────────────────┐ │
+│  │  <!-- Copy this to your website -->│ │
+│  │  <div id="hospital-chat"></div>   │ │
+│  │  <script>                          │ │
+│  │    new HospitalWidget({{           │ │
+│  │      slug: 'city-general-hospital',│ │
+│  │      apiUrl: 'https://api...'      │ │
+│  │    }}).mount('hospital-chat');     │ │
+│  │  </script>                         │ │
+│  └───────────────────────────────────┘ │
+│  [Copy Code]                            │
+│                                         │
+│  Or use Iframe:                         │
+│  ┌───────────────────────────────────┐ │
+│  │  <iframe src="https://.../embed/  │ │
+│  │    city-general-hospital"></iframe>│ │
+│  └───────────────────────────────────┘ │
+│  [Copy Iframe Code]                     │
+│                                         │
+│  📖 Full documentation: [View Docs]    │
+│                                         │
+│  [← Back]  [Continue →]                 │
+└──────────────────────────────────────────┘
+```
+
+What happens:
+- Generate unique integration code
+- Include hospital slug
+- Include API endpoint
+- Provide both widget and iframe options
+- Track: code generated, integration type chosen
+
+Why this step:
+- Hospitals need code to integrate
+- Shows completion is near
+- Provides immediate value
+
+---
+
+### Step 9: Test & launch
+
+What it looks like:
+```
+┌──────────────────────────────────────────┐
+│  Step 9 of 9: Test & Launch              │
+│  ████████████████████████████████ 100%   │
+│                                         │
+│  🎉 Almost Ready!                       │
+│                                         │
+│  Test Your Chat:                         │
+│  ┌───────────────────────────────────┐ │
+│  │  [Open Test Chat Window]          │ │
+│  │  Try booking an appointment       │ │
+│  └───────────────────────────────────┘ │
+│                                         │
+│  Checklist:                             │
+│  ✓ Hospital information complete        │
+│  ✓ URL created: city-general-hospital  │
+│  ✓ 5 departments added                  │
+│  ✓ 12 doctors imported                  │
+│  ⚠️ Calendar not connected (optional)   │
+│                                         │
+│  [Test Chat]  [Launch Hospital]         │
+│                                         │
+│  💡 Your 14-day trial starts now!       │
+└──────────────────────────────────────────┘
+```
+
+What happens:
+- Show completion checklist
+- Provide test chat interface
+- Activate hospital (status: active)
+- Start trial period
+- Send welcome email with credentials
+- Track: launch date, trial start, completion time
+
+---
+
+## How it integrates with admin panel
+
+### Admin panel shows onboarding status
+
+```
+┌──────────────────────────────────────────┐
+│  Hospital Admin Dashboard                │
+├──────────────────────────────────────────┤
+│                                           │
+│  🏥 City General Hospital                │
+│  Status: ✅ Active (Trial: 12 days left)│
+│                                           │
+│  Setup Progress:                         │
+│  ████████████████████████████ 100%       │
+│                                           │
+│  Quick Actions:                          │
+│  [Add More Doctors] [Connect Calendar]   │
+│  [View Integration Code] [Settings]     │
+│                                           │
+│  Recent Activity:                        │
+│  • 5 appointments booked today          │
+│  • 12 chat sessions                     │
+│  • 3 new patients                       │
+│                                           │
+└──────────────────────────────────────────┘
+```
+
+### Onboarding progress tracking
+
+**Database tracking:**
+- Onboarding session table
+- Step completion status
+- Data entered at each step
+- Resume capability
+- Time spent per step
+
+**What gets tracked:**
+- Which steps completed
+- Time to complete each step
+- Drop-off points
+- Errors encountered
+- Completion rate
+
+---
+
+## URL generation strategy
+
+### How unique URLs are generated
+
+**Process:**
+1. Hospital enters name: "City General Hospital"
+2. System suggests: "city-general-hospital"
+3. Real-time check: Is it available?
+   - Available → ✅ Use it
+   - Taken → Suggest alternatives
+4. User can customize:
+   - "citygeneral" (shorter)
+   - "city-general-hosp" (abbreviated)
+   - "cgh-main" (custom)
+5. Final validation:
+   - Format check
+   - Uniqueness check
+   - Reserved words check
+6. Reserve slug:
+   - Temporary lock (5 minutes)
+   - Prevents conflicts during setup
+   - Auto-release if not completed
+
+**URL structure:**
+- Chat: `https://yourdomain.com/h/city-general-hospital`
+- Admin: `https://yourdomain.com/h/city-general-hospital/admin`
+- Embed: `https://yourdomain.com/embed/city-general-hospital`
+
+**Smart suggestions:**
+- If "city-general" taken → "city-general-2", "city-general-hosp", "citygeneral"
+- Show 3 alternatives
+- Highlight recommended option
+
+---
+
+## Doctor import process
+
+### How hospitals add doctors
+
+**Method 1: CSV bulk upload (recommended)**
+
+**CSV template:**
+```
+Name,Department,Phone,Email,Specialization,Tags
+Dr. Sarah Johnson,Cardiology,+91-9876543210,sarah@hospital.com,Heart Surgery,"Cardiology,Heart Surgery"
+Dr. Michael Chen,Neurology,+91-9876543211,chen@hospital.com,Brain Surgery,"Neurology,Brain Surgery"
+```
+
+**Upload process:**
+1. Download template
+2. Fill in doctor data
+3. Upload CSV
+4. System validates:
+   - Required fields present
+   - Department exists
+   - Email format valid
+   - Phone format valid
+5. Preview before saving:
+   - Show all doctors
+   - Highlight errors
+   - Allow editing
+6. Save all or fix errors
+
+**Method 2: Manual entry**
+- Add one by one
+- Form validation
+- Department dropdown
+- Save immediately
+
+**Method 3: API import (for large hospitals)**
+- REST API endpoint
+- Bulk JSON upload
+- For hospitals with 100+ doctors
+
+---
+
+## Admin panel integration
+
+### How everything connects
+
+**1. Onboarding status in admin:**
+```
+Admin Panel → Hospitals → City General Hospital
+┌──────────────────────────────────────────┐
+│  Onboarding Status                       │
+│  ────────────────────────────────────── │
+│  Completed: 9/9 steps                    │
+│  Started: Jan 1, 2024                    │
+│  Completed: Jan 1, 2024 (2 hours)        │
+│                                           │
+│  Steps Completed:                        │
+│  ✓ Account Created                       │
+│  ✓ Email Verified                        │
+│  ✓ Hospital Info                         │
+│  ✓ URL Created                           │
+│  ✓ Departments Added                     │
+│  ✓ Doctors Imported                      │
+│  ⚠️ Calendar (Skipped)                    │
+│  ✓ Integration Code                      │
+│  ✓ Launched                              │
+└──────────────────────────────────────────┘
+```
+
+**2. Hospital management:**
+- View all hospitals
+- See onboarding status
+- Edit hospital details
+- Manage subscription
+- View analytics
+
+**3. Analytics tracking:**
+- Onboarding completion rate
+- Average time to complete
+- Drop-off points
+- Most common errors
+- Trial conversion rate
+
+---
+
+## Critical optimizations
+
+### 1. Resume capability
+- Save progress at each step
+- Allow returning later
+- Show "Continue where you left off"
+- Don't lose data
+
+### 2. Validation at each step
+- Don't proceed with errors
+- Show clear error messages
+- Highlight required fields
+- Real-time validation
+
+### 3. Smart defaults
+- Pre-fill where possible
+- Suggest common departments
+- Auto-generate slugs
+- Provide templates
+
+### 4. Progress indicators
+- Show step X of Y
+- Progress bar
+- Estimated time remaining
+- Completion checklist
+
+### 5. Help & support
+- Tooltips at each step
+- "Need help?" button
+- Video tutorials
+- Live chat support
+
+### 6. Mobile-friendly
+- Works on tablets/phones
+- Touch-friendly inputs
+- Responsive design
+- Mobile-optimized forms
+
+---
+
+## Data flow & tracking
+
+### What gets tracked
+
+**Onboarding metrics:**
+- Start time
+- Completion time
+- Time per step
+- Drop-off points
+- Errors encountered
+- Retry attempts
+
+**Hospital data:**
+- All entered information
+- Slug chosen
+- Departments created
+- Doctors imported
+- Integration method chosen
+
+**User behavior:**
+- Steps visited
+- Time spent
+- Fields edited
+- Help accessed
+- Support contacted
+
+**Analytics dashboard:**
+```
+┌──────────────────────────────────────────┐
+│  Onboarding Analytics                    │
+├──────────────────────────────────────────┤
+│  Completion Rate: 68%                    │
+│  Average Time: 45 minutes               │
+│                                           │
+│  Drop-off Points:                        │
+│  • Step 6 (Doctors): 15%                │
+│  • Step 4 (URL): 8%                     │
+│  • Step 2 (Email): 5%                   │
+│                                           │
+│  Most Common Errors:                     │
+│  • Invalid email format: 12%             │
+│  • Slug already taken: 8%               │
+│  • CSV format error: 6%                 │
+└──────────────────────────────────────────┘
+```
+
+---
+
+## Summary: optimal flow
+
+**For hospitals:**
+1. Sign up → Get account
+2. Verify email → Security
+3. Enter info → Basic setup
+4. Choose URL → Unique identity
+5. Add departments → Structure
+6. Import doctors → Bulk or manual
+7. Connect calendar → Optional
+8. Get code → Integration ready
+9. Test & launch → Go live
+
+**For you:**
+- Track everything
+- Identify bottlenecks
+- Improve conversion
+- Support hospitals
+- Monitor health
+
+**Key principles:**
+- Progressive disclosure (one step at a time)
+- Real-time validation (catch errors early)
+- Save progress (don't lose data)
+- Clear guidance (help at every step)
+- Mobile-friendly (works everywhere)
+- Fast & efficient (respect their time)
+
+This flow balances simplicity with completeness, ensuring hospitals can onboard quickly while capturing all necessary data.
+# Implementation plan: onboarding flow and website integration
+
+## Overview
+
+Goal: Enable hospitals to self-onboard and integrate the chat widget into their websites.
+
+Timeline: 6-8 weeks  
+Team: 1-2 full-stack developers  
+Priority: High (enables self-service growth)
+
+
+
+
+
+Explaining how the integration works after a hospital gets their unique URL. Tracing the flow from URL generation to patient interaction.
+
+
+[4 tools called]
+
+
+## How integration works after URL generation
+
+### The complete flow: from URL to patient interaction
+
+---
+
+## Step 1: Hospital gets their unique URL
+
+**What they receive:**
+```
+Hospital: City General Hospital
+Slug: city-general-hospital
+URL: https://yourdomain.com/h/city-general-hospital
+```
+
+**What this means:**
+- `city-general-hospital` is their unique identifier
+- Stored in your database linked to their `hospital_id`
+- Used to route all requests to their data
+- Cannot be changed easily (affects all URLs)
+
+---
+
+## Step 2: Hospital embeds on their website
+
+### Option A: Iframe embed (simplest)
+
+**Hospital adds this to their website:**
+```html
+<iframe 
+  src="https://yourdomain.com/embed/city-general-hospital"
+  width="100%"
+  height="600px"
+  frameborder="0">
+</iframe>
+```
+
+**What happens:**
+1. Patient visits hospital website
+2. Browser loads iframe
+3. Iframe requests: `https://yourdomain.com/embed/city-general-hospital`
+4. Your server receives request with slug in URL
+
+### Option B: JavaScript widget
+
+**Hospital adds this:**
+```html
+<div id="hospital-chat"></div>
+<script src="https://cdn.yourdomain.com/widget.js"></script>
+<script>
+  new HospitalWidget({
+    slug: 'city-general-hospital',
+    apiUrl: 'https://api.yourdomain.com'
+  }).mount('hospital-chat');
+</script>
+```
+
+**What happens:**
+1. Widget script loads from your CDN
+2. Widget initializes with hospital slug
+3. Widget makes API calls with slug included
+4. All requests scoped to that hospital
+
+---
+
+## Step 3: Request flow (how it works)
+
+### When patient opens chat
+
+**Visual flow:**
+```
+Patient's Browser (Hospital Website)
+    │
+    ├─> Loads iframe/widget
+    │   URL: https://yourdomain.com/embed/city-general-hospital
+    │
+    ▼
+Your Server (Backend)
+    │
+    ├─> Middleware extracts slug: "city-general-hospital"
+    │
+    ├─> Database lookup:
+    │   SELECT * FROM hospitals WHERE slug = 'city-general-hospital'
+    │   → Returns: hospital_id = 5
+    │
+    ├─> Sets tenant context: hospital_id = 5
+    │
+    ▼
+Frontend Loads
+    │
+    ├─> React app initializes
+    │
+    ├─> HospitalContext loads with slug
+    │
+    ├─> All API calls include slug:
+    │   /h/city-general-hospital/start-adaptive-diagnostic
+    │
+    ▼
+Backend Processes Request
+    │
+    ├─> Middleware extracts slug from URL
+    │
+    ├─> Looks up hospital_id = 5
+    │
+    ├─> Sets tenant context
+    │
+    ├─> All database queries filtered:
+    │   SELECT * FROM doctors WHERE hospital_id = 5
+    │
+    └─> Returns only City General Hospital's data
+```
+
+---
+
+## Step 4: How slug identifies hospital
+
+### Backend middleware process
+
+**Every request goes through this:**
+
+1. Request arrives:
+   ```
+   GET /h/city-general-hospital/start-adaptive-diagnostic
+   ```
+
+2. Middleware extracts slug:
+   - Pattern match: `/h/([a-z0-9-]+)`
+   - Extracts: `city-general-hospital`
+
+3. Database lookup:
+   ```sql
+   SELECT id, name, slug FROM hospitals 
+   WHERE slug = 'city-general-hospital'
+   ```
+   - Returns: `hospital_id = 5`
+
+4. Set tenant context:
+   - Stores `hospital_id = 5` in request context
+   - All subsequent queries use this
+
+5. All queries filtered:
+   ```sql
+   -- Instead of:
+   SELECT * FROM doctors
+   
+   -- Automatically becomes:
+   SELECT * FROM doctors WHERE hospital_id = 5
+   ```
+
+---
+
+## Step 5: Patient interaction flow
+
+### Complete example: patient books appointment
+
+**Step 5.1: Patient describes symptoms**
+```
+Patient types: "I have chest pain"
+
+Widget/Iframe sends:
+POST https://api.yourdomain.com/v2/h/city-general-hospital/start-adaptive-diagnostic
+Body: { symptoms: "I have chest pain", session_id: "abc123" }
+```
+
+**What happens:**
+1. Request includes slug in URL path
+2. Middleware extracts `city-general-hospital`
+3. Looks up `hospital_id = 5`
+4. Sets tenant context
+5. Diagnostic service runs
+6. Doctor recommendations query:
+   ```sql
+   SELECT * FROM doctors 
+   WHERE hospital_id = 5 
+   AND department LIKE '%cardiology%'
+   ```
+7. Returns only City General Hospital's cardiologists
+
+**Step 5.2: Patient answers questions**
+```
+POST https://api.yourdomain.com/v2/h/city-general-hospital/answer-adaptive-question
+Body: { session_id: "abc123", question_id: 1, answer_value: "Severe" }
+```
+
+**What happens:**
+- Same slug extraction
+- Same hospital_id lookup
+- Diagnostic session stored with `hospital_id = 5`
+- All data isolated to this hospital
+
+**Step 5.3: Patient books appointment**
+```
+POST https://api.yourdomain.com/h/city-general-hospital/book-appointment
+Body: {
+  doctor_id: 12,
+  patient_name: "John Doe",
+  appointment_date: "2024-01-15",
+  appointment_time: "14:00"
+}
+```
+
+**What happens:**
+1. Slug extracted: `city-general-hospital`
+2. Hospital identified: `hospital_id = 5`
+3. Validates doctor belongs to hospital:
+   ```sql
+   SELECT * FROM doctors 
+   WHERE id = 12 AND hospital_id = 5
+   ```
+4. Creates appointment with `hospital_id = 5`
+5. Syncs to doctor's calendar (if connected)
+6. Returns confirmation
+
+---
+
+## Step 6: Data isolation (critical)
+
+### How data stays separate
+
+**Scenario: Two hospitals using system**
+
+**Hospital A (city-general-hospital):**
+- URL: `/h/city-general-hospital/...`
+- Database: `hospital_id = 5`
+- Doctors: Only doctors where `hospital_id = 5`
+- Appointments: Only appointments where `hospital_id = 5`
+
+**Hospital B (metro-health-center):**
+- URL: `/h/metro-health-center/...`
+- Database: `hospital_id = 8`
+- Doctors: Only doctors where `hospital_id = 8`
+- Appointments: Only appointments where `hospital_id = 8`
+
+**They never see each other's data:**
+- Hospital A's patients can't see Hospital B's doctors
+- Hospital A's admin can't see Hospital B's appointments
+- All queries automatically filtered by `hospital_id`
+
+---
+
+## Step 7: Widget/iframe communication
+
+### How widget talks to backend
+
+**Widget initialization:**
+```
+1. Widget loads with slug: "city-general-hospital"
+2. Widget stores slug in memory
+3. All API calls include slug in URL
+```
+
+**API call pattern:**
+```javascript
+// Widget makes call:
+fetch(`https://api.yourdomain.com/v2/h/city-general-hospital/start-adaptive-diagnostic`, {
+  method: 'POST',
+  body: JSON.stringify({ symptoms: "chest pain" })
+})
+
+// Backend receives:
+// - URL path: /v2/h/city-general-hospital/start-adaptive-diagnostic
+// - Extracts slug: city-general-hospital
+// - Looks up hospital_id
+// - Processes request
+```
+
+**Iframe communication:**
+```
+1. Iframe loads: https://yourdomain.com/embed/city-general-hospital
+2. Your server renders React app with slug in URL
+3. React app extracts slug from URL
+4. All API calls use slug
+5. Same isolation as widget
+```
+
+---
+
+## Step 8: Real-world example
+
+### Complete patient journey
+
+**8.1: Patient visits hospital website**
+```
+https://citygeneralhospital.com
+    ↓
+Sees chat widget/button
+    ↓
+Clicks to open chat
+```
+
+**8.2: Chat loads**
+```
+Widget/Iframe loads:
+https://yourdomain.com/embed/city-general-hospital
+    ↓
+Your server:
+- Extracts slug: "city-general-hospital"
+- Looks up hospital_id = 5
+- Loads React app
+- React app knows it's for hospital_id = 5
+```
+
+**8.3: Patient starts chat**
+```
+Patient: "I need a cardiologist"
+    ↓
+Widget sends:
+POST /v2/h/city-general-hospital/start-adaptive-diagnostic
+    ↓
+Backend:
+- Extracts slug
+- Gets hospital_id = 5
+- Queries: SELECT * FROM doctors WHERE hospital_id = 5
+- Returns only City General's cardiologists
+- LLM recommends from those doctors only
+```
+
+**8.4: Patient books appointment**
+```
+Patient selects: Dr. Sarah Johnson
+    ↓
+Widget sends:
+POST /h/city-general-hospital/book-appointment
+Body: { doctor_id: 12, ... }
+    ↓
+Backend:
+- Validates doctor_id = 12 belongs to hospital_id = 5
+- Creates appointment with hospital_id = 5
+- Syncs to Dr. Johnson's calendar
+- Returns confirmation
+```
+
+**8.5: Hospital admin sees appointment**
+```
+Admin logs into:
+https://yourdomain.com/h/city-general-hospital/admin
+    ↓
+Admin dashboard:
+- Shows only appointments where hospital_id = 5
+- Shows only doctors where hospital_id = 5
+- All data isolated to City General Hospital
+```
+
+---
+
+## Technical details
+
+### URL structure
+
+**Patient-facing URLs:**
+- Chat: `https://yourdomain.com/h/city-general-hospital`
+- Embed: `https://yourdomain.com/embed/city-general-hospital`
+
+**Admin URLs:**
+- Admin panel: `https://yourdomain.com/h/city-general-hospital/admin`
+- Settings: `https://yourdomain.com/h/city-general-hospital/admin/settings`
+
+**API URLs:**
+- All include slug: `/h/city-general-hospital/...`
+- Or: `/v2/h/city-general-hospital/...`
+
+### Slug extraction logic
+
+**Backend middleware:**
+1. Receives request: `/h/city-general-hospital/book-appointment`
+2. Regex match: `/h/([a-z0-9-]+)`
+3. Extracts: `city-general-hospital`
+4. Database query: `SELECT id FROM hospitals WHERE slug = ?`
+5. Gets: `hospital_id = 5`
+6. Stores in request context
+7. All queries filtered by `hospital_id = 5`
+
+### Frontend slug usage
+
+**React app:**
+1. Gets slug from URL or props
+2. Stores in `HospitalContext`
+3. All API calls include slug:
+   ```typescript
+   apiFetch('/start-adaptive-diagnostic', {
+     slug: 'city-general-hospital'
+   })
+   ```
+4. API utility prepends slug to URL:
+   - `/start-adaptive-diagnostic` → `/h/city-general-hospital/start-adaptive-diagnostic`
+
+---
+
+## Security and isolation
+
+### How isolation is enforced
+
+**Layer 1: URL routing**
+- Slug in URL path
+- Middleware extracts it
+- Invalid slug → 404
+
+**Layer 2: Database queries**
+- All queries filtered by `hospital_id`
+- No way to bypass (enforced in middleware)
+- Even if someone tries to access another hospital's data, queries are filtered
+
+**Layer 3: API validation**
+- Every endpoint checks tenant context
+- Validates resources belong to hospital
+- Example: Can't book appointment with doctor from different hospital
+
+**Layer 4: Frontend context**
+- React app only knows its hospital's slug
+- Can't make requests for other hospitals
+- All API calls scoped to current hospital
+
+---
+
+## Integration methods comparison
+
+### Method 1: Iframe (simplest)
+
+**How it works:**
+```
+Hospital Website
+    ↓
+<iframe src="https://yourdomain.com/embed/city-general-hospital">
+    ↓
+Your Server
+    ↓
+Renders React app with slug in URL
+    ↓
+All API calls include slug automatically
+```
+
+**Pros:**
+- Easiest for hospitals (just copy-paste)
+- Full isolation (iframe sandbox)
+- No JavaScript conflicts
+- Easy updates (change your code, all hospitals get update)
+
+**Cons:**
+- Less customization
+- Slight performance overhead
+- SEO considerations (iframe content not indexed)
+
+### Method 2: JavaScript widget
+
+**How it works:**
+```
+Hospital Website
+    ↓
+Loads widget.js from your CDN
+    ↓
+Widget initializes with slug
+    ↓
+Widget makes API calls with slug
+    ↓
+Your backend processes with tenant isolation
+```
+
+**Pros:**
+- More customization
+- Better performance
+- Can style to match hospital's site
+- More control over behavior
+
+**Cons:**
+- Requires JavaScript
+- Potential conflicts with hospital's JS
+- More complex setup
+- Need to handle updates carefully
+
+---
+
+## Data flow diagram
+
+### Complete request-response cycle
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Patient on Hospital Website                                │
+│  https://citygeneralhospital.com                             │
+└─────────────────────────────────────────────────────────────┘
+                    │
+                    │ Clicks chat widget
+                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Widget/Iframe Loads                                        │
+│  https://yourdomain.com/embed/city-general-hospital         │
+└─────────────────────────────────────────────────────────────┘
+                    │
+                    │ Request with slug in URL
+                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Your Backend Server                                        │
+│  ────────────────────────────────────────────────────────  │
+│  1. Extract slug: "city-general-hospital"                   │
+│  2. Query: SELECT id FROM hospitals WHERE slug = ?          │
+│  3. Get: hospital_id = 5                                    │
+│  4. Set tenant context: hospital_id = 5                     │
+└─────────────────────────────────────────────────────────────┘
+                    │
+                    │ Load React app
+                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Frontend React App                                         │
+│  ────────────────────────────────────────────────────────  │
+│  - HospitalContext: slug = "city-general-hospital"        │
+│  - All API calls include slug                              │
+│  - Chat interface loads                                    │
+└─────────────────────────────────────────────────────────────┘
+                    │
+                    │ Patient types: "I have chest pain"
+                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│  API Call                                                   │
+│  POST /v2/h/city-general-hospital/start-adaptive-diagnostic │
+└─────────────────────────────────────────────────────────────┘
+                    │
+                    │ Request with slug
+                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Backend Processing                                         │
+│  ────────────────────────────────────────────────────────  │
+│  1. Extract slug → hospital_id = 5                         │
+│  2. Query doctors:                                         │
+│     SELECT * FROM doctors WHERE hospital_id = 5           │
+│  3. LLM recommends from those doctors only                │
+│  4. Return recommendations                                 │
+└─────────────────────────────────────────────────────────────┘
+                    │
+                    │ Response with hospital-specific data
+                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Widget Displays                                            │
+│  - Only City General Hospital's doctors                    │
+│  - Only City General Hospital's availability               │
+│  - All data scoped to hospital_id = 5                      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Important points
+
+### 1. Slug is the key
+- Every request includes slug
+- Slug maps to `hospital_id`
+- `hospital_id` filters all data
+- No slug = no hospital context = request fails
+
+### 2. Automatic isolation
+- Middleware handles it automatically
+- Developers don't need to remember to filter
+- Impossible to access wrong hospital's data
+- Even bugs can't leak data (enforced at middleware level)
+
+### 3. Frontend is stateless
+- Frontend doesn't store `hospital_id`
+- Only knows the slug
+- Slug comes from URL or configuration
+- Backend does all the mapping
+
+### 4. Scalability
+- Works for 1 hospital or 10,000
+- Each hospital isolated
+- No performance impact
+- Easy to add new hospitals
+
+---
+
+## Summary
+
+**The flow:**
+1. Hospital gets slug: `city-general-hospital`
+2. Hospital embeds widget/iframe with slug
+3. Patient visits hospital website
+4. Widget loads, includes slug in all requests
+5. Backend extracts slug, maps to `hospital_id`
+6. All data filtered by `hospital_id`
+7. Patient only sees that hospital's data
+8. Hospital admin only sees their data
+9. Complete isolation, automatic and secure
+
+**The magic:**
+- Slug in URL → Backend extracts → Maps to `hospital_id` → Filters all data
+- Works automatically for every request
+- No manual filtering needed
+- Secure by design
+
+This is how multi-tenant SaaS works: one codebase, multiple hospitals, complete data isolation through URL-based routing.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+---
+
+## Phase 1: Foundation and database (Week 1)
+
+### 1.1 Database schema enhancements
+
+New tables needed:
+
+**OnboardingSession table:**
+- Track progress through onboarding
+- Store partial data at each step
+- Enable resume capability
+- Link to admin_user (not hospital yet)
+
+**EmailVerification table:**
+- Store verification tokens
+- Track verification status
+- Expiration timestamps
+- Security audit trail
+
+**TrialPeriod table:**
+- Track trial start/end dates
+- Trial status (active, expired, converted)
+- Usage limits during trial
+- Conversion tracking
+
+**IntegrationCode table:**
+- Store generated integration codes
+- Track which hospitals use which method
+- Version control for code changes
+- Analytics on integration types
+
+### 1.2 Enhance existing models
+
+**Hospital model additions:**
+- `onboarding_status` (not_started, in_progress, completed, abandoned)
+- `onboarding_completed_at` (timestamp)
+- `trial_start_date` (when trial began)
+- `trial_end_date` (when trial expires)
+- `subdomain` (optional for white-label)
+- `integration_method` (widget, iframe, api)
+- `integration_active` (boolean - is it live?)
+
+**AdminUser model additions:**
+- `email_verified` (boolean)
+- `email_verified_at` (timestamp)
+- `onboarding_session_id` (link to onboarding)
+- `last_onboarding_step` (resume point)
+
+### 1.3 Reserved slugs system
+
+**Create reserved_slugs table:**
+- List of reserved words (admin, api, www, support, etc.)
+- Prevent conflicts
+- System slugs that can't be used
+
+**Slug validation service:**
+- Real-time availability checking
+- Format validation
+- Conflict detection
+- Smart suggestions
+
+---
+
+## Phase 2: Backend API development (Week 2)
+
+### 2.1 Onboarding endpoints
+
+**Public endpoints (no auth required):**
+- `POST /onboarding/register` - Create account
+- `POST /onboarding/verify-email` - Verify email
+- `GET /onboarding/verify-email/{token}` - Email link verification
+- `POST /onboarding/resend-verification` - Resend email
+
+**Authenticated endpoints (after email verification):**
+- `POST /onboarding/hospital-info` - Step 3: Hospital information
+- `POST /onboarding/validate-slug` - Step 4: Real-time slug validation
+- `POST /onboarding/reserve-slug` - Reserve slug temporarily
+- `POST /onboarding/departments` - Step 5: Add departments
+- `POST /onboarding/doctors/bulk-upload` - Step 6: Upload CSV
+- `POST /onboarding/doctors/preview` - Preview before saving
+- `POST /onboarding/doctors/save` - Save doctors
+- `POST /onboarding/calendar-connect` - Step 7: Calendar OAuth
+- `GET /onboarding/integration-code` - Step 8: Get code
+- `POST /onboarding/complete` - Step 9: Launch hospital
+
+**Progress tracking:**
+- `GET /onboarding/progress` - Get current progress
+- `POST /onboarding/resume` - Resume from last step
+
+### 2.2 Slug management service
+
+**Features:**
+- Real-time availability API
+- Auto-suggestion algorithm
+- Conflict resolution
+- Temporary reservation (5-minute lock)
+- Format validation
+- Reserved word checking
+
+**API endpoints:**
+- `GET /onboarding/slug/suggest?name={name}` - Get suggestions
+- `POST /onboarding/slug/check` - Check availability
+- `POST /onboarding/slug/reserve` - Reserve slug
+- `POST /onboarding/slug/confirm` - Confirm reservation
+
+### 2.3 Doctor import service enhancements
+
+**CSV validation:**
+- Format validation
+- Required field checking
+- Data type validation
+- Department matching
+- Duplicate detection
+
+**Preview system:**
+- Parse CSV without saving
+- Return preview with validation status
+- Allow editing before save
+- Show errors clearly
+
+**Bulk import:**
+- Transaction-based (all or nothing)
+- Progress tracking for large imports
+- Error reporting
+- Success/failure summary
+
+### 2.4 Integration code generation service
+
+**Features:**
+- Generate widget code
+- Generate iframe code
+- Include hospital slug
+- Include API endpoint
+- Version control
+- Customization options
+
+**API endpoints:**
+- `GET /onboarding/integration/widget/{slug}` - Widget code
+- `GET /onboarding/integration/iframe/{slug}` - Iframe code
+- `GET /onboarding/integration/sdk/{slug}` - SDK code
+
+---
+
+## Phase 3: Frontend onboarding flow (Week 2)
+
+### 3.1 Onboarding wizard component
+
+**Structure:**
+- Multi-step wizard
+- Progress indicator
+- Step validation
+- Auto-save progress
+- Resume capability
+- Mobile responsive
+
+**Steps implementation:**
+1. Account creation form
+2. Email verification screen
+3. Hospital information form
+4. Slug selection with real-time validation
+5. Departments setup (add/remove)
+6. Doctors import (CSV upload + preview)
+7. Calendar integration (optional OAuth)
+8. Integration code display
+9. Test & launch screen
+
+### 3.2 Real-time slug validation
+
+**Features:**
+- Live availability checking
+- Format validation
+- Smart suggestions
+- Visual feedback (✅/❌)
+- Alternative suggestions
+- Reserved word detection
+
+**UX:**
+- Check as user types (debounced)
+- Show loading state
+- Clear error messages
+- Suggest alternatives
+- Preview final URL
+
+### 3.3 CSV upload and preview
+
+**Features:**
+- Drag-and-drop upload
+- File validation
+- CSV parsing
+- Preview table
+- Error highlighting
+- Edit before save
+- Download template
+
+**Preview table:**
+- Show all doctors
+- Highlight errors
+- Allow inline editing
+- Remove rows
+- Validation summary
+
+### 3.4 Progress persistence
+
+**Features:**
+- Auto-save at each step
+- Resume from last step
+- Progress indicator
+- Completion checklist
+- Time tracking
+
+---
+
+## Phase 4: Widget/Integration system (Week 3)
+
+### 4.1 Widget architecture
+
+**Two approaches:**
+
+**Approach A: Standalone widget bundle**
+- Build separate React bundle
+- Include all dependencies
+- Loadable via script tag
+- Self-contained
+
+**Approach B: Iframe embed**
+- Simpler for hospitals
+- No JavaScript required
+- Full isolation
+- Easier updates
+
+**Recommendation: Build both**
+
+### 4.2 Widget implementation
+
+**Widget features:**
+- Hospital slug configuration
+- API endpoint configuration
+- Customizable styling
+- Responsive design
+- Error handling
+- Loading states
+
+**Widget loader:**
+- Lightweight loader script
+- Loads main widget bundle
+- Configures hospital context
+- Handles errors gracefully
+
+### 4.3 Iframe embed system
+
+**Embed page:**
+- Standalone HTML page
+- Includes React app
+- Hospital slug from URL
+- Full-screen chat interface
+- Mobile optimized
+
+**Security:**
+- X-Frame-Options configuration
+- CSP headers
+- Origin validation
+- Clickjacking protection
+
+### 4.4 CDN and hosting
+
+**Requirements:**
+- CDN for widget assets
+- Version control
+- Cache invalidation
+- Global distribution
+- SSL certificates
+
+---
+
+## Phase 5: Admin panel integration (Week 3)
+
+### 5.1 Onboarding status dashboard
+
+**Features:**
+- View all hospitals in onboarding
+- See progress for each
+- Identify stuck hospitals
+- Send reminders
+- Manual intervention tools
+
+**Metrics:**
+- Completion rate
+- Average time to complete
+- Drop-off points
+- Error frequency
+- Support requests
+
+### 5.2 Integration management page
+
+**Features:**
+- View integration code for any hospital
+- Regenerate codes
+- Test integrations
+- View integration analytics
+- Troubleshoot issues
+
+### 5.3 Hospital activation workflow
+
+**Features:**
+- Review hospital data before activation
+- Approve/reject (optional)
+- Manual activation
+- Trial period management
+- Subscription setup
+
+---
+
+## Phase 6: Testing and optimization (Week 4)
+
+### 6.1 Testing strategy
+
+**Unit tests:**
+- Slug generation logic
+- Validation functions
+- CSV parsing
+- Integration code generation
+
+**Integration tests:**
+- Complete onboarding flow
+- Widget loading
+- Iframe embedding
+- API endpoints
+
+**E2E tests:**
+- Full onboarding journey
+- Widget on test website
+- Error scenarios
+- Resume functionality
+
+### 6.2 Performance optimization
+
+**Optimizations:**
+- Lazy load onboarding steps
+- Optimize widget bundle size
+- CDN caching
+- Database query optimization
+- Real-time validation throttling
+
+### 6.3 UX improvements
+
+**Enhancements:**
+- Loading states
+- Error messages
+- Help tooltips
+- Video tutorials
+- Progress animations
+- Success celebrations
+
+---
+
+## Phase 7: Documentation and launch (Week 5)
+
+### 7.1 Documentation
+
+**Hospital documentation:**
+- Onboarding guide
+- Integration guide
+- Widget customization
+- Troubleshooting
+- FAQ
+
+**Developer documentation:**
+- API documentation
+- Widget API
+- SDK documentation
+- Integration examples
+
+### 7.2 Marketing materials
+
+**Assets:**
+- Demo video
+- Screenshots
+- Integration examples
+- Case studies
+- Pricing page
+
+---
+
+## Technical architecture decisions
+
+### Database design
+
+**OnboardingSession table:**
+```
+- id (PK)
+- admin_user_id (FK)
+- current_step (integer)
+- step_data (JSON) - Store data for each step
+- completed_steps (JSON array)
+- started_at (timestamp)
+- last_updated_at (timestamp)
+- completed_at (timestamp)
+- abandoned_at (timestamp)
+```
+
+**EmailVerification table:**
+```
+- id (PK)
+- admin_user_id (FK)
+- token (unique)
+- email (string)
+- verified (boolean)
+- verified_at (timestamp)
+- expires_at (timestamp)
+- created_at (timestamp)
+```
+
+### API design patterns
+
+**RESTful endpoints:**
+- Clear resource naming
+- Proper HTTP methods
+- Status codes
+- Error handling
+- Rate limiting
+
+**Real-time validation:**
+- WebSocket for slug checking (optional)
+- Polling with debouncing (simpler)
+- Server-sent events (middle ground)
+
+### Security considerations
+
+**Onboarding security:**
+- Rate limiting on registration
+- Email verification required
+- Password strength requirements
+- CSRF protection
+- Input sanitization
+- SQL injection prevention
+
+**Widget security:**
+- CORS configuration
+- Origin validation
+- Token-based authentication (optional)
+- Content Security Policy
+- XSS prevention
+
+---
+
+## Implementation priorities
+
+### Must have (MVP)
+1. Account creation + email verification
+2. Hospital information collection
+3. Slug generation and validation
+4. Department setup
+5. Doctor import (CSV)
+6. Integration code generation
+7. Basic widget/iframe
+8. Progress tracking
+
+### Should have (v1.1)
+1. Calendar integration in onboarding
+2. Widget customization
+3. Advanced analytics
+4. Resume capability
+5. Help system
+
+### Nice to have (v1.2)
+1. White-label subdomains
+2. API SDK
+3. Advanced widget features
+4. A/B testing
+5. Onboarding analytics dashboard
+
+---
+
+## Success metrics
+
+### Onboarding metrics
+- Completion rate (target: >70%)
+- Average time to complete (target: <45 minutes)
+- Drop-off rate by step
+- Error rate
+- Support ticket volume
+
+### Integration metrics
+- Integration success rate
+- Time to first integration
+- Widget vs iframe usage
+- Customization usage
+- Active integrations
+
+### Business metrics
+- Trial signups
+- Trial to paid conversion
+- Time to first appointment
+- Hospital satisfaction score
+
+---
+
+## Risk mitigation
+
+### Technical risks
+- Slug conflicts → Reservation system
+- Large CSV imports → Chunked processing
+- Widget loading issues → Fallback mechanisms
+- Email delivery failures → Multiple providers
+
+### UX risks
+- Complex flow → Progressive disclosure
+- Data loss → Auto-save
+- Confusion → Clear guidance
+- Mobile issues → Responsive design
+
+### Business risks
+- Low completion → Simplify steps
+- Support burden → Self-service docs
+- Integration failures → Testing tools
+
+---
+
+## Post-launch improvements
+
+### Week 9-10: Iteration
+- Analyze onboarding data
+- Identify bottlenecks
+- Improve drop-off points
+- Enhance error messages
+
+### Week 11-12: Enhancements
+- Advanced features
+- Customization options
+- Analytics improvements
+- Performance optimization
+
+---
+
+## Final recommendations
+
+### Do first
+1. Email verification system
+2. Slug validation service
+3. Basic onboarding flow (steps 1-6)
+4. Simple iframe embed
+5. Progress tracking
+
+### Do well
+1. Real-time slug validation
+2. CSV preview system
+3. Auto-save functionality
+4. Clear error messages
+5. Mobile responsiveness
+
+### Don't overcomplicate
+1. Start with iframe (simpler)
+2. Add widget later if needed
+3. Keep onboarding to 6-7 steps max
+4. Use existing admin panel where possible
+5. Iterate based on feedback
+
+This plan balances speed, quality, and scalability. Start with MVP, then iterate based on real usage data.
+
+
+
+
+

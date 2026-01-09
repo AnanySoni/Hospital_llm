@@ -75,23 +75,27 @@ const DoctorManagement: React.FC<DoctorManagementProps> = ({ currentUser }) => {
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterCalendar, setFilterCalendar] = useState<string>('all');
 
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const pageSize = 12;
-  const departments = ['Cardiology', 'Neurology', 'Pediatrics', 'Orthopedics', 'Dermatology', 'General Medicine'];
   const specializations = ['Cardiologist', 'Neurologist', 'Pediatrician', 'Orthopedic Surgeon', 'Dermatologist', 'General Physician'];
 
   const { hospital } = useHospital();
+  const [departments, setDepartments] = useState<string[]>([]);
 
   useEffect(() => {
     fetchDoctors();
+    fetchDepartments();
   }, [currentPage, searchTerm, filterDepartment, filterStatus, filterCalendar, hospital]);
 
   const fetchDoctors = async () => {
     try {
       setLoading(true);
       const token = localStorage.getItem('admin_access_token');
-      // Use hospital slug for API call
-      const doctors = await apiFetch('/admin/doctors', {
-        slug: hospital?.slug || '',
+      // Use hospital slug for API call via query parameter
+      const slug = hospital?.slug || '';
+      const endpoint = slug ? `/admin/doctors?slug=${encodeURIComponent(slug)}` : '/admin/doctors';
+      const doctors = await apiFetch(endpoint, {
+        slug: '', // slug already encoded in endpoint
         token: token || undefined
       });
       setDoctors(Array.isArray(doctors) ? doctors : doctors.doctors || []);
@@ -102,11 +106,32 @@ const DoctorManagement: React.FC<DoctorManagementProps> = ({ currentUser }) => {
     }
   };
 
+  const fetchDepartments = async () => {
+    try {
+      const token = localStorage.getItem('admin_access_token');
+      const slug = hospital?.slug || '';
+      const endpoint = slug ? `/admin/departments?slug=${encodeURIComponent(slug)}` : '/admin/departments';
+      const result = await apiFetch(endpoint, {
+        slug: '',
+        token: token || undefined,
+      });
+      const deptNames: string[] = Array.isArray(result)
+        ? result.map((d: any) => d.name)
+        : (result.departments || []).map((d: any) => d.name);
+      setDepartments(deptNames);
+    } catch (err) {
+      // Silently ignore department load errors for now; doctor management still works
+      // Optionally log to console for debugging
+      // console.error('Failed to fetch departments', err);
+    }
+  };
+
   const handleConnectCalendar = async (doctorId: number) => {
     try {
       const token = localStorage.getItem('admin_access_token');
       // This would typically redirect to Google OAuth
-      window.open(`http://localhost:8000/auth/google/login?doctor_id=${doctorId}`, '_blank');
+      const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+      window.open(`${API_BASE}/auth/google/login?doctor_id=${doctorId}`, '_blank');
     } catch (err: any) {
       setError(err.message || 'Failed to connect calendar');
     }
@@ -114,36 +139,125 @@ const DoctorManagement: React.FC<DoctorManagementProps> = ({ currentUser }) => {
 
   const handleCreateDoctor = async (doctorData: any) => {
     try {
+      setLoading(true);
       const token = localStorage.getItem('admin_access_token');
-      // API call would go here
+      const slug = hospital?.slug || '';
+      const endpoint = slug ? `/admin/doctors?slug=${encodeURIComponent(slug)}` : '/admin/doctors';
+      await apiFetch(endpoint, {
+        slug: '',
+        token: token || undefined,
+        method: 'POST',
+        body: doctorData
+      });
       await fetchDoctors();
       setShowCreateModal(false);
     } catch (err: any) {
       setError(err.message || 'Failed to create doctor');
+    } finally {
+      setLoading(false);
     }
   };
 
   const handleUpdateDoctor = async (doctorId: number, doctorData: any) => {
     try {
+      setLoading(true);
       const token = localStorage.getItem('admin_access_token');
-      // API call would go here
+      const slug = hospital?.slug || '';
+      const endpoint = slug ? `/admin/doctors/${doctorId}?slug=${encodeURIComponent(slug)}` : `/admin/doctors/${doctorId}`;
+      await apiFetch(endpoint, {
+        slug: '',
+        token: token || undefined,
+        method: 'PUT',
+        body: doctorData
+      });
       await fetchDoctors();
       setShowEditModal(false);
       setSelectedDoctor(null);
     } catch (err: any) {
       setError(err.message || 'Failed to update doctor');
+    } finally {
+      setLoading(false);
     }
   };
 
   const handleDeleteDoctor = async (doctorId: number) => {
     try {
+      setLoading(true);
       const token = localStorage.getItem('admin_access_token');
-      // API call would go here
+      const slug = hospital?.slug || '';
+      const endpoint = slug ? `/admin/doctors/${doctorId}?slug=${encodeURIComponent(slug)}` : `/admin/doctors/${doctorId}`;
+      await apiFetch(endpoint, {
+        slug: '',
+        token: token || undefined,
+        method: 'DELETE'
+      });
       await fetchDoctors();
       setShowDeleteModal(false);
       setSelectedDoctor(null);
     } catch (err: any) {
       setError(err.message || 'Failed to delete doctor');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (file.type !== 'text/csv' && !file.name.toLowerCase().endsWith('.csv')) {
+      setError('Please select a valid CSV file');
+      return;
+    }
+    setSelectedFile(file);
+  };
+
+  const handleBulkUpload = async () => {
+    if (!selectedFile) {
+      setError('Please select a CSV file to upload');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setError('');
+      const token = localStorage.getItem('admin_access_token');
+      const slug = hospital?.slug || '';
+
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+
+      const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+      const endpoint = slug
+        ? `${API_BASE}/admin/doctors/bulk-upload?slug=${encodeURIComponent(slug)}`
+        : `${API_BASE}/admin/doctors/bulk-upload`;
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Authorization': token ? `Bearer ${token}` : '',
+        },
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ detail: 'Bulk upload failed' }));
+        throw new Error(errorData.detail || `Bulk upload failed with status ${response.status}`);
+      }
+
+      const result = await response.json().catch(() => ({}));
+      setShowBulkUploadModal(false);
+      setSelectedFile(null);
+      await fetchDoctors();
+
+      const successCount = (result && (result.success_count ?? result.created ?? 0)) || 0;
+      if (successCount > 0) {
+        // eslint-disable-next-line no-alert
+        alert(`Successfully uploaded ${successCount} doctor${successCount === 1 ? '' : 's'}.`);
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to upload doctors');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -427,23 +541,143 @@ const DoctorManagement: React.FC<DoctorManagementProps> = ({ currentUser }) => {
         </div>
       )}
 
-      {/* Modals - Placeholder implementations */}
+      {/* Modals */}
       {showCreateModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white p-6 rounded-lg max-w-md w-full">
             <h3 className="text-lg font-semibold mb-4">Add New Doctor</h3>
-            <p className="text-gray-600 mb-4">Doctor creation form will be implemented here.</p>
-            <div className="flex justify-end space-x-2">
-              <button
-                onClick={() => setShowCreateModal(false)}
-                className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
-              >
-                Cancel
-              </button>
-              <button className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
-                Create
-              </button>
-            </div>
+            <p className="text-gray-600 mb-4">
+              Fill in the basic details to add a doctor to this hospital.
+            </p>
+            <form
+              className="space-y-3"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                const form = e.target as HTMLFormElement;
+                const formData = new FormData(form);
+                const languagesRaw = (formData.get('languages') as string) || '';
+                const languages = languagesRaw
+                  .split(',')
+                  .map(l => l.trim())
+                  .filter(Boolean);
+
+                const doctorPayload = {
+                  name: formData.get('name') as string,
+                  email: formData.get('email') as string,
+                  phone: (formData.get('phone') as string) || null,
+                  specialization: formData.get('specialization') as string,
+                  department: formData.get('department') as string,
+                  experience_years: Number(formData.get('experience_years') || 0),
+                  qualification: (formData.get('qualification') as string) || '',
+                  consultation_fee: Number(formData.get('consultation_fee') || 0),
+                  languages,
+                  working_hours: {},
+                  profile_image: null,
+                  medical_license: (formData.get('medical_license') as string) || null,
+                };
+
+                await handleCreateDoctor(doctorPayload);
+              }}
+            >
+              <div className="grid grid-cols-1 gap-3">
+                <input
+                  name="name"
+                  required
+                  placeholder="Full name"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <input
+                  name="email"
+                  type="email"
+                  required
+                  placeholder="Email"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <input
+                  name="phone"
+                  placeholder="Phone (optional)"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <input
+                  name="specialization"
+                  required
+                  placeholder="Specialization (e.g. Cardiologist)"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  list="specializations"
+                />
+                <datalist id="specializations">
+                  {specializations.map(spec => (
+                    <option key={spec} value={spec} />
+                  ))}
+                </datalist>
+                <select
+                  name="department"
+                  required
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  defaultValue=""
+                >
+                  <option value="" disabled>
+                    Select department
+                  </option>
+                  {departments.map(dept => (
+                    <option key={dept} value={dept}>
+                      {dept}
+                    </option>
+                  ))}
+                </select>
+                <div className="grid grid-cols-2 gap-3">
+                  <input
+                    name="experience_years"
+                    type="number"
+                    min={0}
+                    defaultValue={0}
+                    placeholder="Experience (years)"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <input
+                    name="consultation_fee"
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    defaultValue={0}
+                    placeholder="Consultation fee"
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <input
+                  name="qualification"
+                  placeholder="Qualification (e.g. MBBS, MD)"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <input
+                  name="languages"
+                  placeholder="Languages (comma separated)"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <input
+                  name="medical_license"
+                  placeholder="Medical license (optional)"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div className="flex justify-end space-x-2 mt-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCreateModal(false);
+                  }}
+                  className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                >
+                  Create
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -455,20 +689,39 @@ const DoctorManagement: React.FC<DoctorManagementProps> = ({ currentUser }) => {
             <p className="text-gray-600 mb-4">Upload a CSV file with doctor information.</p>
             <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center">
               <Upload className="mx-auto h-12 w-12 text-gray-400" />
-              <p className="mt-2 text-sm text-gray-600">Drop your CSV file here or click to browse</p>
-              <button className="mt-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+              <p className="mt-2 text-sm text-gray-600">
+                {selectedFile ? selectedFile.name : 'Drop your CSV file here or click to browse'}
+              </p>
+              <input
+                id="doctor-bulk-upload"
+                type="file"
+                accept=".csv"
+                className="hidden"
+                onChange={handleFileSelect}
+              />
+              <label
+                htmlFor="doctor-bulk-upload"
+                className="mt-2 inline-block px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 cursor-pointer"
+              >
                 Select File
-              </button>
+              </label>
             </div>
             <div className="flex justify-end space-x-2 mt-4">
               <button
-                onClick={() => setShowBulkUploadModal(false)}
+                onClick={() => {
+                  setShowBulkUploadModal(false);
+                  setSelectedFile(null);
+                }}
                 className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
               >
                 Cancel
               </button>
-              <button className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
-                Upload
+              <button
+                onClick={handleBulkUpload}
+                disabled={!selectedFile || loading}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+              >
+                {loading ? 'Uploading...' : 'Upload'}
               </button>
             </div>
           </div>

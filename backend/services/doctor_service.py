@@ -11,7 +11,7 @@ from email.mime.multipart import MIMEMultipart
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, UploadFile
-from datetime import datetime
+from datetime import datetime, date, timedelta
 
 from backend.core.models import Doctor, Department, AdminUser, Hospital
 from backend.schemas.admin_models import (
@@ -45,6 +45,17 @@ class DoctorService:
         db.add(doctor)
         db.commit()
         db.refresh(doctor)
+
+        # Automatically generate availability slots for the next 30 days
+        try:
+            from backend.services.appointment_service import generate_slots_for_date_range
+
+            today = date.today()
+            end_date = today + timedelta(days=30)
+            generate_slots_for_date_range(db, doctor.id, today, end_date)
+        except Exception:
+            # Slot generation failure should not block doctor creation
+            pass
         
         return doctor
     

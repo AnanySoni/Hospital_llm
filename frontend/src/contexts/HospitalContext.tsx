@@ -37,7 +37,8 @@ export const HospitalProvider = ({ slug, children }: { slug: string; children: R
     try {
       // Use correct backend endpoint for hospital lookup
       console.log(`[HospitalContext] Making API call to: /admin/hospitals/by-slug/${slug}`);
-      const res = await fetch(`/admin/hospitals/by-slug/${slug}`);
+      const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+      const res = await fetch(`${API_BASE}/admin/hospitals/by-slug/${slug}`);
       console.log(`[HospitalContext] Response status: ${res.status}`);
       if (!res.ok) throw new Error('Hospital not found');
       const data = await res.json();

@@ -82,7 +82,8 @@ const TestBookingForm: React.FC<TestBookingFormProps> = ({
 
     try {
       // Call phone recognition API
-      const response = await fetch('http://localhost:8000/phone-recognition', {
+      const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+      const response = await fetch(`${API_BASE}/phone-recognition`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ phone_number: formattedPhone }),
@@ -103,7 +104,7 @@ const TestBookingForm: React.FC<TestBookingFormProps> = ({
           // Generate smart welcome if handler provided
           if (onPatientRecognized) {
             try {
-              const smartWelcomeResponse = await fetch('http://localhost:8000/smart-welcome', {
+              const smartWelcomeResponse = await fetch(`${API_BASE}/smart-welcome`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

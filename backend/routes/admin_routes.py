@@ -15,8 +15,10 @@ from backend.schemas.admin_models import (
     PaginationParams, PaginatedResponse, SuccessResponse,
     DoctorCreateRequest, DoctorUpdateRequest, DoctorResponse,
     BulkUploadResponse, BulkUploadResult,
+    DepartmentCreateRequest, DepartmentUpdateRequest, DepartmentResponse,
     EmailInvitationRequest, EmailInvitationResponse
 )
+from backend.schemas.request_models import CalendarConnectionRequest
 
 import logging
 import csv
@@ -91,6 +93,63 @@ async def logout(
         return SuccessResponse(message="Logout successful")
     except Exception as e:
         logger.error(f"Admin logout failed: {str(e)}")
+        raise
+
+
+@router.get("/me", response_model=AdminUserResponse)
+async def get_me(
+    current_user: AdminUser = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Return the current authenticated admin user's profile, including roles,
+    flattened permissions, and hospital_id. This is used by the admin shell
+    to bootstrap context.
+    """
+    try:
+        # Load roles and permissions for the current user
+        roles = []
+        permissions: List[str] = []
+
+        user_roles = db.query(UserRole).filter_by(admin_user_id=current_user.id).all()
+        for user_role in user_roles:
+            role = db.query(Role).filter_by(id=user_role.role_id).first()
+            if role:
+                roles.append(
+                    {
+                        "id": role.id,
+                        "name": role.name,
+                        "display_name": role.display_name,
+                    }
+                )
+                if role.permissions:
+                    import json
+
+                    try:
+                        role_permissions = json.loads(role.permissions)
+                        permissions.extend(role_permissions)
+                    except json.JSONDecodeError:
+                        pass
+
+        return AdminUserResponse(
+            id=current_user.id,
+            username=current_user.username,
+            email=current_user.email,
+            first_name=current_user.first_name,
+            last_name=current_user.last_name,
+            phone=current_user.phone,
+            hospital_id=current_user.hospital_id if current_user.hospital_id is not None else 0,
+            is_super_admin=current_user.is_super_admin,
+            is_active=current_user.is_active,
+            last_login=current_user.last_login,
+            two_factor_enabled=current_user.two_factor_enabled,
+            created_at=current_user.created_at,
+            updated_at=current_user.updated_at,
+            roles=roles,
+            permissions=list(set(permissions)),
+        )
+    except Exception as e:
+        logger.error(f"/admin/me failed: {str(e)}")
         raise
 
 # ============================================================================
@@ -721,12 +780,22 @@ async def get_doctors(
 @router.post("/doctors", response_model=DoctorResponse)
 async def create_doctor(
     doctor_data: DoctorCreateRequest,
+    slug: Optional[str] = Query(None),
     current_user: AdminUser = Depends(require_permission("doctor:create")),
     db: Session = Depends(get_db)
 ):
     """Create a new doctor"""
     try:
-        doctor = DoctorService.create_doctor(db, doctor_data, current_user.hospital_id, current_user)
+        # Resolve hospital_id from slug if provided
+        resolved_hospital_id = current_user.hospital_id
+        if slug:
+            hospital = db.query(Hospital).filter(Hospital.slug == slug).first()
+            if hospital:
+                resolved_hospital_id = hospital.id
+            else:
+                raise HTTPException(status_code=404, detail=f"Hospital with slug '{slug}' not found")
+        
+        doctor = DoctorService.create_doctor(db, doctor_data, resolved_hospital_id, current_user)
         
         return DoctorResponse(
             id=doctor.id,
@@ -808,17 +877,317 @@ async def delete_doctor(
         logger.error(f"Delete doctor failed: {str(e)}")
         raise
 
+
+# ============================================================================
+# CALENDAR INTEGRATION ROUTES
+# ============================================================================
+
+@router.get("/calendar/connections")
+async def get_calendar_connections(
+    slug: Optional[str] = Query(None, description="Hospital slug for tenant isolation"),
+    db: Session = Depends(get_db),
+    current_user: AdminUser = Depends(require_permission("calendar:read")),
+    hospital_id: Optional[int] = Query(None, description="Hospital ID for super admins"),
+):
+    """
+    List calendar connections for all doctors in the current hospital.
+    Uses Doctor.google_access_token as the connection indicator.
+    """
+    try:
+      # Resolve hospital_id: slug -> explicit hospital_id -> current_user.hospital_id
+        resolved_hospital_id = None
+        if slug:
+            hospital = db.query(Hospital).filter_by(slug=slug).first()
+            if not hospital:
+                raise HTTPException(status_code=404, detail="Hospital not found for slug")
+            resolved_hospital_id = hospital.id
+        elif hospital_id is not None and current_user.is_super_admin:
+            resolved_hospital_id = hospital_id
+        elif not current_user.is_super_admin:
+            resolved_hospital_id = current_user.hospital_id
+
+        query = db.query(Doctor)
+        if resolved_hospital_id:
+            query = query.filter(Doctor.hospital_id == resolved_hospital_id)
+
+        doctors = query.all()
+        connections = []
+        for doctor in doctors:
+            connection_status = "connected" if doctor.google_access_token else "disconnected"
+            connections.append({
+                "id": doctor.id,
+                "doctor_id": doctor.id,
+                "doctor_name": doctor.name,
+                "doctor_email": "",  # Doctor model currently has no email field
+                "google_calendar_id": doctor.google_access_token or "",
+                "calendar_name": doctor.name,
+                "connection_status": connection_status,
+                "last_sync": None,
+                "sync_status": "success" if doctor.google_access_token else "pending",
+                "events_synced": 0,
+                "created_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.utcnow().isoformat(),
+            })
+
+        return {"connections": connections}
+    except Exception as e:
+        logger.error(f"Get calendar connections failed: {str(e)}")
+        raise
+
+
+@router.post("/calendar/sync/{doctor_id}")
+async def sync_doctor_calendar(
+    doctor_id: int,
+    db: Session = Depends(get_db),
+    current_user: AdminUser = Depends(require_permission("calendar:manage")),
+):
+    """
+    Trigger a sync for a single doctor's calendar.
+    For now, this is a stub that always returns success.
+    """
+    try:
+        doctor = db.query(Doctor).filter(Doctor.id == doctor_id).first()
+        if not doctor:
+            raise HTTPException(status_code=404, detail="Doctor not found")
+
+        # TODO: Integrate with real Google Calendar sync logic
+        logger.info(f"Stub calendar sync triggered for doctor_id={doctor_id} by admin={current_user.id}")
+
+        return {"message": "Calendar sync triggered", "doctor_id": doctor_id}
+    except Exception as e:
+        logger.error(f"Sync doctor calendar failed: {str(e)}")
+        raise
+
+
+@router.post("/calendar/sync-all")
+async def sync_all_calendars(
+    slug: Optional[str] = Query(None, description="Hospital slug for tenant isolation"),
+    db: Session = Depends(get_db),
+    current_user: AdminUser = Depends(require_permission("calendar:manage")),
+    hospital_id: Optional[int] = Query(None, description="Hospital ID for super admins"),
+):
+    """
+    Trigger a sync for all doctors in the current hospital.
+    Currently implemented as a stub for UI integration.
+    """
+    try:
+        resolved_hospital_id = None
+        if slug:
+            hospital = db.query(Hospital).filter_by(slug=slug).first()
+            if not hospital:
+                raise HTTPException(status_code=404, detail="Hospital not found for slug")
+            resolved_hospital_id = hospital.id
+        elif hospital_id is not None and current_user.is_super_admin:
+            resolved_hospital_id = hospital_id
+        elif not current_user.is_super_admin:
+            resolved_hospital_id = current_user.hospital_id
+
+        query = db.query(Doctor)
+        if resolved_hospital_id:
+            query = query.filter(Doctor.hospital_id == resolved_hospital_id)
+
+        doctor_ids = [d.id for d in query.all()]
+        logger.info(
+            f"Stub calendar sync-all triggered for hospital_id={resolved_hospital_id}, "
+            f"doctor_ids={doctor_ids} by admin={current_user.id}"
+        )
+
+        # TODO: Integrate with batch Google Calendar sync
+        return {"message": "Calendar sync-all triggered", "doctor_ids": doctor_ids}
+    except Exception as e:
+        logger.error(f"Sync all calendars failed: {str(e)}")
+        raise
+
+
+# ============================================================================
+# DEPARTMENT MANAGEMENT ROUTES
+# ============================================================================
+
+@router.get("/departments", response_model=List[DepartmentResponse])
+async def get_departments(
+    slug: Optional[str] = Query(None, description="Hospital slug for tenant isolation"),
+    current_user: AdminUser = Depends(require_permission("department:read")),
+    db: Session = Depends(get_db)
+):
+    """Get all departments for the current hospital (or all hospitals for super admins)."""
+    try:
+        # Resolve hospital_id from slug if provided, otherwise use current_user
+        resolved_hospital_id = current_user.hospital_id
+        if slug:
+            hospital = db.query(Hospital).filter_by(slug=slug).first()
+            if not hospital:
+                raise HTTPException(status_code=404, detail="Hospital not found for slug")
+            resolved_hospital_id = hospital.id
+            # Non-superadmin cannot impersonate another hospital
+            if not current_user.is_super_admin and resolved_hospital_id != current_user.hospital_id:
+                raise HTTPException(status_code=403, detail="Access denied to this hospital")
+
+        query = db.query(Department)
+        if not current_user.is_super_admin:
+            query = query.filter(Department.hospital_id == resolved_hospital_id)
+
+        departments = query.all()
+
+        responses: List[DepartmentResponse] = []
+        for dept in departments:
+            doctor_count = db.query(Doctor).filter(Doctor.department_id == dept.id).count()
+            responses.append(
+                DepartmentResponse(
+                    id=dept.id,
+                    name=dept.name,
+                    description=None,
+                    head_doctor_id=None,
+                    head_doctor_name=None,
+                    doctor_count=doctor_count,
+                    is_active=True,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow(),
+                )
+            )
+        return responses
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Get departments failed: {str(e)}")
+        raise
+
+
+@router.post("/departments", response_model=DepartmentResponse)
+async def create_department(
+    department_data: DepartmentCreateRequest,
+    current_user: AdminUser = Depends(require_permission("department:create")),
+    db: Session = Depends(get_db)
+):
+    """Create a new department for the current hospital."""
+    try:
+        if not current_user.hospital_id and not current_user.is_super_admin:
+            raise HTTPException(status_code=400, detail="User is not associated with a hospital")
+
+        dept = Department(
+            name=department_data.name,
+            hospital_id=current_user.hospital_id,
+        )
+        db.add(dept)
+        db.commit()
+        db.refresh(dept)
+
+        return DepartmentResponse(
+            id=dept.id,
+            name=dept.name,
+            description=department_data.description,
+            head_doctor_id=department_data.head_doctor_id,
+            head_doctor_name=None,
+            doctor_count=0,
+            is_active=True,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Create department failed: {str(e)}")
+        raise
+
+
+@router.put("/departments/{department_id}", response_model=DepartmentResponse)
+async def update_department(
+    department_id: int,
+    department_data: DepartmentUpdateRequest,
+    current_user: AdminUser = Depends(require_permission("department:update")),
+    db: Session = Depends(get_db)
+):
+    """Update an existing department."""
+    try:
+        dept = db.query(Department).filter(Department.id == department_id).first()
+        if not dept:
+            raise HTTPException(status_code=404, detail="Department not found")
+
+        if not current_user.is_super_admin and dept.hospital_id != current_user.hospital_id:
+            raise HTTPException(status_code=403, detail="Access denied to this department")
+
+        if department_data.name is not None:
+            dept.name = department_data.name
+        # head_doctor_id / is_active are not yet persisted on the model, so we only accept name for now
+
+        db.commit()
+        db.refresh(dept)
+
+        doctor_count = db.query(Doctor).filter(Doctor.department_id == dept.id).count()
+        return DepartmentResponse(
+            id=dept.id,
+            name=dept.name,
+            description=None,
+            head_doctor_id=None,
+            head_doctor_name=None,
+            doctor_count=doctor_count,
+            is_active=True,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Update department failed: {str(e)}")
+        raise
+
+
+@router.delete("/departments/{department_id}", response_model=SuccessResponse)
+async def delete_department(
+    department_id: int,
+    current_user: AdminUser = Depends(require_permission("department:delete")),
+    db: Session = Depends(get_db)
+):
+    """Delete a department if it has no doctors."""
+    try:
+        dept = db.query(Department).filter(Department.id == department_id).first()
+        if not dept:
+            raise HTTPException(status_code=404, detail="Department not found")
+
+        if not current_user.is_super_admin and dept.hospital_id != current_user.hospital_id:
+            raise HTTPException(status_code=403, detail="Access denied to this department")
+
+        doctor_count = db.query(Doctor).filter(Doctor.department_id == department_id).count()
+        if doctor_count > 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot delete department with {doctor_count} doctor(s). Reassign or remove doctors first.",
+            )
+
+        db.delete(dept)
+        db.commit()
+        return SuccessResponse(message="Department deleted successfully")
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Delete department failed: {str(e)}")
+        raise
+
 @router.post("/doctors/bulk-upload", response_model=BulkUploadResponse)
 async def bulk_upload_doctors(
     file: UploadFile = File(...),
+    slug: Optional[str] = Query(None),
     current_user: AdminUser = Depends(require_permission("doctor:create")),
     db: Session = Depends(get_db)
 ):
     """Bulk upload doctors from CSV file"""
     try:
-        result = DoctorService.bulk_upload_doctors(db, file, current_user.hospital_id, current_user)
+        # Resolve hospital_id from slug if provided
+        resolved_hospital_id = current_user.hospital_id
+        if slug:
+            hospital = db.query(Hospital).filter(Hospital.slug == slug).first()
+            if hospital:
+                resolved_hospital_id = hospital.id
+            else:
+                raise HTTPException(status_code=404, detail=f"Hospital with slug '{slug}' not found")
+        
+        result = DoctorService.bulk_upload_doctors(db, file, resolved_hospital_id, current_user)
         return result
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Bulk upload doctors failed: {str(e)}")
         raise

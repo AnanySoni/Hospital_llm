@@ -11,7 +11,8 @@ import {
   UserPlus, 
   Shield,
   Activity,
-  Bell
+  Bell,
+  Layers
 } from 'lucide-react';
 
 // Import the management components
@@ -20,6 +21,7 @@ import HospitalManagement from './HospitalManagement';
 import DoctorManagement from './DoctorManagement';
 import CalendarIntegration from './CalendarIntegration';
 import AnalyticsDashboard from './AnalyticsDashboard';
+import DepartmentsManagement from './DepartmentsManagement';
 
 interface AdminDashboardProps {
   user?: {
@@ -78,6 +80,13 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
       permission: 'doctor:read',
     },
     {
+      id: 'departments',
+      name: 'Departments',
+      icon: Layers,
+      path: '/admin/departments',
+      permission: 'department:read',
+    },
+    {
       id: 'calendar',
       name: 'Calendar Setup',
       icon: Calendar,
@@ -123,6 +132,8 @@ const AdminDashboard: React.FC<AdminDashboardProps> = ({ user, onLogout }) => {
         return <HospitalsContent user={user} />;
       case 'doctors':
         return <DoctorsContent user={user} />;
+      case 'departments':
+        return <DepartmentsManagement />;
       case 'calendar':
         return <CalendarContent user={user} />;
       case 'analytics':

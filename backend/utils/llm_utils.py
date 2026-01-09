@@ -5,6 +5,7 @@ import uuid
 import logging
 import asyncio
 from typing import Dict, List, Optional, Tuple
+from pathlib import Path
 from dotenv import load_dotenv
 from sqlalchemy.orm import Session
 from datetime import datetime
@@ -20,7 +21,10 @@ except ImportError:
         else:
             return "low"
 
-load_dotenv()
+# Load .env from project root explicitly so LLM keys and DB config are available
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ENV_PATH = PROJECT_ROOT / ".env"
+load_dotenv(ENV_PATH)
 
 logger = logging.getLogger(__name__)
 

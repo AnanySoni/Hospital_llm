@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Hospital, Lock, User, Eye, EyeOff, AlertCircle, Loader2 } from 'lucide-react';
 
 interface AdminLoginProps {
@@ -30,6 +31,7 @@ interface LoginResponse {
 }
 
 const AdminLogin: React.FC<AdminLoginProps> = ({ onLogin, isLoading = false, error }) => {
+  const navigate = useNavigate();
   const [credentials, setCredentials] = useState<LoginCredentials>({
     username: '',
     password: '',
@@ -181,6 +183,15 @@ const AdminLogin: React.FC<AdminLoginProps> = ({ onLogin, isLoading = false, err
               {validationErrors.password && (
                 <p className="mt-1 text-sm text-red-600">{validationErrors.password}</p>
               )}
+              <div className="mt-1 text-right">
+                <button
+                  type="button"
+                  onClick={() => navigate('/onboarding/forgot-password')}
+                  className="text-xs text-blue-600 hover:text-blue-700 hover:underline"
+                >
+                  Forgot password?
+                </button>
+              </div>
             </div>
 
             {/* 2FA Code Field */}

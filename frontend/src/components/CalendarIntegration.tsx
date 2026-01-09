@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useHospital } from '../contexts/HospitalContext';
 import { 
   Calendar, 
   Plus, 
@@ -43,6 +44,7 @@ interface CalendarIntegrationProps {
 }
 
 const CalendarIntegration: React.FC<CalendarIntegrationProps> = ({ currentUser }) => {
+  const { hospital } = useHospital();
   const [connections, setConnections] = useState<CalendarConnection[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>('');
@@ -61,54 +63,27 @@ const CalendarIntegration: React.FC<CalendarIntegrationProps> = ({ currentUser }
   const fetchConnections = async () => {
     try {
       setLoading(true);
-      
-      // Mock data for demonstration
-      const mockConnections: CalendarConnection[] = [
-        {
-          id: 1,
-          doctor_id: 1,
-          doctor_name: "Dr. Sarah Johnson",
-          doctor_email: "sarah.johnson@hospital.com",
-          google_calendar_id: "sarah.johnson@hospital.com",
-          calendar_name: "Dr. Sarah Johnson - Appointments",
-          connection_status: "connected",
-          last_sync: "2024-01-20T10:30:00Z",
-          sync_status: "success",
-          events_synced: 45,
-          created_at: "2024-01-15T08:00:00Z",
-          updated_at: "2024-01-20T10:30:00Z"
-        },
-        {
-          id: 2,
-          doctor_id: 2,
-          doctor_name: "Dr. Michael Chen",
-          doctor_email: "michael.chen@hospital.com",
-          google_calendar_id: "",
-          calendar_name: "",
-          connection_status: "disconnected",
-          last_sync: null,
-          sync_status: "pending",
-          events_synced: 0,
-          created_at: "2024-01-10T08:00:00Z",
-          updated_at: "2024-01-10T08:00:00Z"
-        },
-        {
-          id: 3,
-          doctor_id: 3,
-          doctor_name: "Dr. Emily Rodriguez",
-          doctor_email: "emily.rodriguez@hospital.com",
-          google_calendar_id: "emily.rodriguez@hospital.com",
-          calendar_name: "Dr. Emily Rodriguez - Pediatrics",
-          connection_status: "connected",
-          last_sync: "2024-01-19T14:15:00Z",
-          sync_status: "success",
-          events_synced: 67,
-          created_at: "2024-01-12T08:00:00Z",
-          updated_at: "2024-01-19T14:15:00Z"
-        }
-      ];
+      setError('');
 
-      setConnections(mockConnections);
+      const token = localStorage.getItem('admin_access_token');
+      const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+      const slug = hospital?.slug || '';
+      const url = slug
+        ? `${API_BASE}/admin/calendar/connections?slug=${encodeURIComponent(slug)}`
+        : `${API_BASE}/admin/calendar/connections`;
+
+      const response = await fetch(url, {
+        headers: {
+          'Authorization': token ? `Bearer ${token}` : '',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch calendar connections');
+      }
+
+      const data = await response.json();
+      setConnections(data.connections || []);
     } catch (err: any) {
       setError(err.message || 'Failed to fetch calendar connections');
     } finally {
@@ -121,7 +96,8 @@ const CalendarIntegration: React.FC<CalendarIntegrationProps> = ({ currentUser }
       const token = localStorage.getItem('admin_access_token');
       
       // Open Google OAuth flow
-      const authUrl = `http://localhost:8000/auth/google/login?doctor_id=${doctorId}`;
+      const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+      const authUrl = `${API_BASE}/auth/google/login?doctor_id=${doctorId}`;
       const authWindow = window.open(authUrl, 'google-auth', 'width=500,height=600');
       
       // Listen for auth completion
@@ -142,7 +118,8 @@ const CalendarIntegration: React.FC<CalendarIntegrationProps> = ({ currentUser }
       const token = localStorage.getItem('admin_access_token');
       
       // API call to disconnect calendar
-      const response = await fetch(`http://localhost:8000/admin/calendar/disconnect/${connectionId}`, {
+      const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+      const response = await fetch(`${API_BASE}/admin/calendar/disconnect/${connectionId}`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -173,7 +150,8 @@ const CalendarIntegration: React.FC<CalendarIntegrationProps> = ({ currentUser }
         )
       );
 
-      const response = await fetch(`http://localhost:8000/admin/calendar/sync/${connectionId}`, {
+      const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+      const response = await fetch(`${API_BASE}/admin/calendar/sync/${connectionId}`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -197,7 +175,8 @@ const CalendarIntegration: React.FC<CalendarIntegrationProps> = ({ currentUser }
       setSyncingAll(true);
       const token = localStorage.getItem('admin_access_token');
       
-      const response = await fetch('http://localhost:8000/admin/calendar/sync-all', {
+      const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+      const response = await fetch(`${API_BASE}/admin/calendar/sync-all`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,

@@ -14,10 +14,11 @@ from fastapi import HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from backend.core.models import AdminUser, Hospital, Role, UserRole, Permission, AuditLog
+from backend.core.database import get_db
 from backend.schemas.admin_models import AdminUserCreate, AdminUserUpdate, LoginRequest, TokenResponse
 
 # JWT Configuration
-SECRET_KEY = "your-secret-key-change-in-production"  # Change in production
+SECRET_KEY = "4ujiOYQONbkD-GG8yCqRFkLZ1NVDokVyYABo8LtDWtE"  # Change in production
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 REFRESH_TOKEN_EXPIRE_DAYS = 7
@@ -431,7 +432,10 @@ class AuthService:
         db.commit()
 
 # Dependency functions
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(lambda: next(__import__('backend.core.database', fromlist=['get_db']).get_db()))) -> AdminUser:
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security), 
+    db: Session = Depends(get_db)
+) -> AdminUser:
     """Get the current authenticated user"""
     token = credentials.credentials
     payload = AuthService.verify_token(token)
@@ -451,7 +455,10 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
 
 def require_permission(permission: str):
     """Decorator to require specific permission"""
-    def permission_checker(current_user: AdminUser = Depends(get_current_user), db: Session = Depends(lambda: next(__import__('backend.core.database', fromlist=['get_db']).get_db()))):
+    def permission_checker(
+        current_user: AdminUser = Depends(get_current_user), 
+        db: Session = Depends(get_db)
+    ):
         permissions = AuthService._get_user_permissions(db, current_user)
         if permission not in permissions and not current_user.is_super_admin:
             raise HTTPException(status_code=403, detail=f"Permission required: {permission}")

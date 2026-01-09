@@ -45,7 +45,8 @@ const AdminApp: React.FC<AdminAppProps> = ({ slug }) => {
     try {
       const token = localStorage.getItem('admin_access_token');
       if (token) {
-        const response = await fetch('http://localhost:8000/admin/me', {
+        const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+        const response = await fetch(`${API_BASE}/admin/me`, {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json',
@@ -75,7 +76,8 @@ const AdminApp: React.FC<AdminAppProps> = ({ slug }) => {
     setError('');
 
     try {
-      const response = await fetch('http://localhost:8000/admin/login', {
+      const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+      const response = await fetch(`${API_BASE}/admin/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -113,7 +115,8 @@ const AdminApp: React.FC<AdminAppProps> = ({ slug }) => {
       const token = localStorage.getItem('admin_access_token');
       if (token) {
         // Call logout endpoint
-        await fetch('http://localhost:8000/admin/logout', {
+        const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+        await fetch(`${API_BASE}/admin/logout`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${token}`,
@@ -139,7 +142,8 @@ const AdminApp: React.FC<AdminAppProps> = ({ slug }) => {
         return false;
       }
 
-      const response = await fetch('http://localhost:8000/admin/refresh', {
+      const API_BASE = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+      const response = await fetch(`${API_BASE}/admin/refresh`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

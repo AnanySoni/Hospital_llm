@@ -1,15 +1,20 @@
 import os
+from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from dotenv import load_dotenv
 
-load_dotenv()
+# Resolve project root (two levels up from backend/core/)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+ENV_PATH = PROJECT_ROOT / ".env"
 
-# Use environment variables or default to your existing database
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://postgres:kev1jiph@localhost:5432/hospital_db"
-)
+# Load .env from project root explicitly
+load_dotenv(ENV_PATH)
+
+# Database URL must be provided via environment variable
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL environment variable is required")
 
 engine = create_engine(
     DATABASE_URL,

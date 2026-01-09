@@ -20,13 +20,31 @@ def grant_permissions_to_hospital_admins(db: Session):
         return
 
     # Ensure the hospital_admin role has all required permissions
+    # NOTE: This list is the source of truth for what hospital admins can do.
+    # It must stay in sync with any new require_permission("...") usages,
+    # such as department:* and calendar:* permissions.
     required_permissions = [
+        # Admin users
         "admin:create", "admin:read", "admin:update",
+
+        # Doctors
         "doctor:create", "doctor:read", "doctor:update", "doctor:delete",
+
+        # Patients
         "patient:create", "patient:read", "patient:update", "patient:delete",
+
+        # Appointments
         "appointment:create", "appointment:read", "appointment:update", "appointment:delete",
+
+        # Analytics and hospitals
         "analytics:read",
-        "hospital:read"
+        "hospital:read",
+
+        # Departments
+        "department:create", "department:read", "department:update", "department:delete",
+
+        # Calendar / scheduling
+        "calendar:read", "calendar:manage",
     ]
     current_permissions = set(json.loads(hospital_admin_role.permissions or "[]"))
     updated_permissions = set(required_permissions) | current_permissions

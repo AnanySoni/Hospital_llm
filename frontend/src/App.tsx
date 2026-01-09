@@ -8,6 +8,14 @@ import ProgressToggle from './components/ProgressToggle';
 import MobileProgressBar from './components/MobileProgressBar';
 import AdminApp from './components/AdminApp';
 import { ProgressProvider, useProgress } from './contexts/ProgressContext';
+import OnboardingRegister from './components/OnboardingRegister';
+import OnboardingGoogleCallback from './components/OnboardingGoogleCallback';
+import OnboardingVerifyEmail from './components/OnboardingVerifyEmail';
+import OnboardingHospitalInfo from './components/OnboardingHospitalInfo';
+import OnboardingResume from './components/OnboardingResume';
+import OnboardingComplete from './components/OnboardingComplete';
+import ForgotPassword from './components/ForgotPassword';
+import ResetPassword from './components/ResetPassword';
 
 // Removed stray untyped function signature for AppContent
 function AppContent({ slug }: { slug?: string }) {
@@ -33,7 +41,6 @@ function AppContent({ slug }: { slug?: string }) {
           {/* Action Buttons */}
           <div className="flex items-center space-x-1 sm:space-x-2 flex-shrink-0">
             <ProgressToggle />
-            <GoogleCalendarConnect onConnectionChange={setIsCalendarConnected} />
           </div>
         </div>
       </header>
@@ -132,6 +139,16 @@ function App() {
   return (
     <Router>
       <Routes>
+        {/* Public onboarding routes (no hospital slug required) */}
+        <Route path="/onboarding" element={<OnboardingResume />} />
+        <Route path="/onboarding/register" element={<OnboardingRegister />} />
+        <Route path="/onboarding/google/callback" element={<OnboardingGoogleCallback />} />
+        <Route path="/onboarding/verify-email" element={<OnboardingVerifyEmail />} />
+        <Route path="/onboarding/hospital-info" element={<OnboardingHospitalInfo />} />
+        <Route path="/onboarding/complete" element={<OnboardingComplete />} />
+        <Route path="/onboarding/forgot-password" element={<ForgotPassword />} />
+        <Route path="/onboarding/reset-password" element={<ResetPassword />} />
+
         <Route path="/h/:slug" element={<ChatRouteWrapper />} />
         <Route path="/h/:slug/admin" element={<AdminRouteWrapper />} />
         {/* Fallback: redirect to /h/demo1 or show 404 */}
